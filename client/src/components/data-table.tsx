@@ -7,7 +7,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import type { ColumnInfo } from "@/lib/types";
 
 interface DataTableProps {
@@ -51,8 +50,8 @@ export function DataTable({ columns, rows, isLoading }: DataTableProps) {
   }
 
   return (
-    <ScrollArea className="border rounded-lg bg-card">
-      <Table>
+    <div className="border rounded-lg bg-card overflow-x-auto">
+      <Table className="min-w-max">
         <TableHeader className="sticky top-0 bg-card z-10">
           <TableRow>
             {columns.map((col) => (
@@ -95,7 +94,6 @@ export function DataTable({ columns, rows, isLoading }: DataTableProps) {
           ))}
         </TableBody>
       </Table>
-      <ScrollBar orientation="horizontal" />
-    </ScrollArea>
+    </div>
   );
 }

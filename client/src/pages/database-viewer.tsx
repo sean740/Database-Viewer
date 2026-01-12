@@ -7,7 +7,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Header } from "@/components/header";
 import { TableSidebar } from "@/components/table-sidebar";
 import { ControlBar } from "@/components/control-bar";
-import { FilterPanel } from "@/components/filter-panel";
+import { DynamicFilter } from "@/components/dynamic-filter";
 import { NLQPanel } from "@/components/nlq-panel";
 import { DataTable } from "@/components/data-table";
 import { PaginationControls } from "@/components/pagination-controls";
@@ -357,12 +357,11 @@ export default function DatabaseViewer() {
               />
             )}
 
-            {selectedTable && filterDefinitions.length > 0 && (
-              <FilterPanel
-                filterDefinitions={filterDefinitions}
+            {selectedTable && visibleColumns.length > 0 && (
+              <DynamicFilter
+                columns={visibleColumns}
                 activeFilters={activeFilters}
                 onApplyFilters={handleApplyFilters}
-                onClearFilters={handleClearFilters}
               />
             )}
 

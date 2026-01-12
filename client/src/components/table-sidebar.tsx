@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Search, Table2, Loader2 } from "lucide-react";
+import { Search, Table2, Loader2, EyeOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { TableInfo } from "@/lib/types";
+import { useAuth } from "@/hooks/use-auth";
 
 interface TableSidebarProps {
   tables: TableInfo[];
@@ -19,6 +21,8 @@ export function TableSidebar({
   isLoading,
 }: TableSidebarProps) {
   const [search, setSearch] = useState("");
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
 
   const filteredTables = tables.filter((t) => {
     const searchLower = search.toLowerCase();
@@ -58,31 +62,41 @@ export function TableSidebar({
             </div>
           ) : (
             <div className="space-y-1">
-              {filteredTables.map((table) => (
-                <button
-                  key={table.fullName}
-                  onClick={() => onTableSelect(table.fullName)}
-                  className={cn(
-                    "w-full flex flex-col gap-0.5 px-3 py-2 rounded-md text-sm text-left transition-colors hover-elevate",
-                    selectedTable === table.fullName
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground"
-                  )}
-                  data-testid={`button-table-${table.fullName}`}
-                >
-                  <div className="flex items-center gap-2">
-                    <Table2 className="h-4 w-4 shrink-0" />
-                    <span className="text-xs truncate">
-                      {table.displayName || table.fullName}
-                    </span>
-                  </div>
-                  {table.displayName && (
-                    <span className="font-mono text-[10px] text-muted-foreground truncate ml-6">
-                      {table.fullName}
-                    </span>
-                  )}
-                </button>
-              ))}
+              {filteredTables.map((table) => {
+                const isHidden = table.isVisible === false;
+                return (
+                  <button
+                    key={table.fullName}
+                    onClick={() => onTableSelect(table.fullName)}
+                    className={cn(
+                      "w-full flex flex-col gap-0.5 px-3 py-2 rounded-md text-sm text-left transition-colors hover-elevate",
+                      selectedTable === table.fullName
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground",
+                      isHidden && isAdmin && "opacity-60"
+                    )}
+                    data-testid={`button-table-${table.fullName}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Table2 className="h-4 w-4 shrink-0" />
+                      <span className={cn("text-xs truncate", isHidden && isAdmin && "line-through")}>
+                        {table.displayName || table.fullName}
+                      </span>
+                      {isHidden && isAdmin && (
+                        <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 shrink-0">
+                          <EyeOff className="h-3 w-3 mr-0.5" />
+                          Hidden
+                        </Badge>
+                      )}
+                    </div>
+                    {table.displayName && (
+                      <span className="font-mono text-[10px] text-muted-foreground truncate ml-6">
+                        {table.fullName}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>

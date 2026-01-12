@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ArrowLeft, Users, Table, Shield, Trash2, Plus, Loader2, UserPlus, Eye, EyeOff, Pencil } from "lucide-react";
+import { ArrowLeft, Users, Table, Shield, Trash2, Plus, Loader2, UserPlus, Eye, EyeOff } from "lucide-react";
 import type { User, TableGrant, UserRole, DatabaseConnection, TableInfo, TableSettings } from "@/lib/types";
 
 export default function AdminPage() {
@@ -403,7 +403,8 @@ export default function AdminPage() {
               <CardHeader>
                 <CardTitle>Table Visibility & Display Names</CardTitle>
                 <CardDescription>
-                  Control which tables are visible to non-admin users and set custom display names
+                  Control which tables are visible to non-admin users and set custom display names. 
+                  These are cosmetic changes only and do not affect the database.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -434,114 +435,91 @@ export default function AdminPage() {
                         No tables found in this database
                       </p>
                     ) : (
-                      <div className="border rounded-lg divide-y">
-                        {visibilityTables.map((table) => {
-                          const settingsKey = `${visibilityDatabase}:${table.fullName}`;
-                          const settings = tableSettings[settingsKey];
-                          const isVisible = settings?.isVisible !== false;
-                          const displayName = settings?.displayName || null;
-                          const isEditing = editingDisplayName === settingsKey;
+                      <div className="border rounded-lg overflow-hidden">
+                        <div className="grid grid-cols-[auto_1fr_1fr_auto] gap-4 p-3 bg-muted/50 border-b text-sm font-medium">
+                          <div>Visible</div>
+                          <div>Table Name</div>
+                          <div>Display Name</div>
+                          <div>Action</div>
+                        </div>
+                        <div className="divide-y">
+                          {visibilityTables.map((table) => {
+                            const settingsKey = `${visibilityDatabase}:${table.fullName}`;
+                            const settings = tableSettings[settingsKey];
+                            const isVisible = settings?.isVisible !== false;
+                            const currentDisplayName = settings?.displayName || "";
+                            const isEditing = editingDisplayName === settingsKey;
+                            const editValue = isEditing ? displayNameValue : currentDisplayName;
 
-                          return (
-                            <div
-                              key={table.fullName}
-                              className="flex items-center justify-between p-4"
-                              data-testid={`table-settings-${table.fullName}`}
-                            >
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
+                            return (
+                              <div
+                                key={table.fullName}
+                                className="grid grid-cols-[auto_1fr_1fr_auto] gap-4 p-3 items-center"
+                                data-testid={`table-settings-${table.fullName}`}
+                              >
+                                <div className="flex items-center justify-center">
+                                  <Switch
+                                    checked={isVisible}
+                                    onCheckedChange={(checked) => {
+                                      updateTableSettingsMutation.mutate({
+                                        database: visibilityDatabase,
+                                        tableName: table.fullName,
+                                        isVisible: checked,
+                                        displayName: currentDisplayName || null,
+                                      });
+                                    }}
+                                    data-testid={`switch-visibility-${table.fullName}`}
+                                  />
+                                </div>
+                                <div className="flex items-center gap-2 min-w-0">
                                   <Table className="h-4 w-4 text-muted-foreground shrink-0" />
                                   <span className="font-mono text-sm truncate">{table.fullName}</span>
                                 </div>
-                                {isEditing ? (
-                                  <div className="flex items-center gap-2 mt-2">
-                                    <Input
-                                      value={displayNameValue}
-                                      onChange={(e) => setDisplayNameValue(e.target.value)}
-                                      placeholder="Enter display name"
-                                      className="h-8 text-sm"
-                                      data-testid={`input-display-name-${table.fullName}`}
-                                    />
-                                    <Button
-                                      size="sm"
-                                      onClick={() => {
-                                        updateTableSettingsMutation.mutate({
-                                          database: visibilityDatabase,
-                                          tableName: table.fullName,
-                                          isVisible,
-                                          displayName: displayNameValue || null,
-                                        });
-                                      }}
-                                      disabled={updateTableSettingsMutation.isPending}
-                                      data-testid={`button-save-display-name-${table.fullName}`}
-                                    >
-                                      Save
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => setEditingDisplayName(null)}
-                                      data-testid={`button-cancel-display-name-${table.fullName}`}
-                                    >
-                                      Cancel
-                                    </Button>
-                                  </div>
-                                ) : displayName ? (
-                                  <div className="flex items-center gap-2 mt-1">
-                                    <span className="text-sm text-muted-foreground">Display name:</span>
-                                    <span className="text-sm font-medium">{displayName}</span>
-                                    <Button
-                                      size="icon"
-                                      variant="ghost"
-                                      className="h-6 w-6"
-                                      onClick={() => {
+                                <div className="min-w-0">
+                                  <Input
+                                    value={editValue}
+                                    onChange={(e) => {
+                                      if (!isEditing) {
                                         setEditingDisplayName(settingsKey);
-                                        setDisplayNameValue(displayName);
-                                      }}
-                                      data-testid={`button-edit-display-name-${table.fullName}`}
-                                    >
-                                      <Pencil className="h-3 w-3" />
-                                    </Button>
-                                  </div>
-                                ) : (
-                                  <Button
-                                    variant="ghost"
-                                    className="h-auto p-0 mt-1 text-sm text-primary"
-                                    onClick={() => {
-                                      setEditingDisplayName(settingsKey);
-                                      setDisplayNameValue("");
+                                      }
+                                      setDisplayNameValue(e.target.value);
                                     }}
-                                    data-testid={`button-add-display-name-${table.fullName}`}
+                                    onFocus={() => {
+                                      if (!isEditing) {
+                                        setEditingDisplayName(settingsKey);
+                                        setDisplayNameValue(currentDisplayName);
+                                      }
+                                    }}
+                                    placeholder="Enter display name"
+                                    className="h-9"
+                                    data-testid={`input-display-name-${table.fullName}`}
+                                  />
+                                </div>
+                                <div>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      updateTableSettingsMutation.mutate({
+                                        database: visibilityDatabase,
+                                        tableName: table.fullName,
+                                        isVisible,
+                                        displayName: displayNameValue || null,
+                                      });
+                                    }}
+                                    disabled={!isEditing || updateTableSettingsMutation.isPending}
+                                    data-testid={`button-save-${table.fullName}`}
                                   >
-                                    <Pencil className="h-3 w-3 mr-1" /> Set display name
+                                    {updateTableSettingsMutation.isPending ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      "Save"
+                                    )}
                                   </Button>
-                                )}
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2 ml-4">
-                                <span className="text-sm text-muted-foreground">
-                                  {isVisible ? "Visible" : "Hidden"}
-                                </span>
-                                <Switch
-                                  checked={isVisible}
-                                  onCheckedChange={(checked) => {
-                                    updateTableSettingsMutation.mutate({
-                                      database: visibilityDatabase,
-                                      tableName: table.fullName,
-                                      isVisible: checked,
-                                      displayName,
-                                    });
-                                  }}
-                                  data-testid={`switch-visibility-${table.fullName}`}
-                                />
-                                {isVisible ? (
-                                  <Eye className="h-4 w-4 text-muted-foreground" />
-                                ) : (
-                                  <EyeOff className="h-4 w-4 text-muted-foreground" />
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
                   </div>

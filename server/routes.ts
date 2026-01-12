@@ -143,7 +143,7 @@ function getOpenAIClient(): OpenAI | null {
 // Middleware to check user role
 function requireRole(...allowedRoles: UserRole[]) {
   return async (req: Request, res: Response, next: Function) => {
-    const userId = (req.user as any)?.claims?.sub;
+    const userId = (req.user as any)?.id;
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized" });
     }
@@ -234,7 +234,7 @@ export async function registerRoutes(
   app.post("/api/admin/grants", isAuthenticated, requireRole("admin", "washos_user"), async (req: Request, res: Response) => {
     try {
       const { userId, database, tableName } = req.body;
-      const grantedBy = (req.user as any)?.claims?.sub;
+      const grantedBy = (req.user as any)?.id;
       
       if (!userId || !database || !tableName) {
         return res.status(400).json({ error: "userId, database, and tableName are required" });
@@ -269,7 +269,7 @@ export async function registerRoutes(
   // Get current user with role info
   app.get("/api/auth/me", isAuthenticated, async (req: Request, res: Response) => {
     try {
-      const userId = (req.user as any)?.claims?.sub;
+      const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       if (!user) {
         return res.status(404).json({ error: "User not found" });
@@ -299,7 +299,7 @@ export async function registerRoutes(
   app.get("/api/tables/:database", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const { database } = req.params;
-      const userId = (req.user as any)?.claims?.sub;
+      const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       
       if (!user || !user.isActive) {
@@ -346,7 +346,7 @@ export async function registerRoutes(
         const { database, fullTable } = req.params;
         
         // Check table access for external customers
-        const userId = (req.user as any)?.claims?.sub;
+        const userId = (req.user as any)?.id;
         const user = await authStorage.getUser(userId);
         if (user?.role === "external_customer") {
           const allowedTables = await getAllowedTables(userId);
@@ -440,7 +440,7 @@ export async function registerRoutes(
       const { database, table, page = 1, filters = [] } = req.body;
       
       // Check table access for external customers
-      const userId = (req.user as any)?.claims?.sub;
+      const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       if (user?.role === "external_customer") {
         const allowedTables = await getAllowedTables(userId);
@@ -553,7 +553,7 @@ export async function registerRoutes(
       }
       
       // Check table access for external customers
-      const userId = (req.user as any)?.claims?.sub;
+      const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       if (user?.role === "external_customer") {
         const allowedTables = await getAllowedTables(userId);
@@ -694,7 +694,7 @@ export async function registerRoutes(
       }
       
       // Check table access for external customers (if a table is specified)
-      const userId = (req.user as any)?.claims?.sub;
+      const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       if (user?.role === "external_customer" && currentTable) {
         const allowedTables = await getAllowedTables(userId);

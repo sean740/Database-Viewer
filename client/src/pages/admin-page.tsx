@@ -6,13 +6,14 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ArrowLeft, Users, Table, Shield, Trash2, Plus, Loader2 } from "lucide-react";
+import { ArrowLeft, Users, Table, Shield, Trash2, Plus, Loader2, UserPlus } from "lucide-react";
 import type { User, TableGrant, UserRole, DatabaseConnection, TableInfo } from "@/lib/types";
 
 export default function AdminPage() {
@@ -23,6 +24,12 @@ export default function AdminPage() {
   const [isGrantDialogOpen, setIsGrantDialogOpen] = useState(false);
   const [grantDatabase, setGrantDatabase] = useState("");
   const [grantTable, setGrantTable] = useState("");
+  const [isCreateUserDialogOpen, setIsCreateUserDialogOpen] = useState(false);
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
+  const [newUserFirstName, setNewUserFirstName] = useState("");
+  const [newUserLastName, setNewUserLastName] = useState("");
+  const [newUserRole, setNewUserRole] = useState<UserRole>("external_customer");
 
   const { data: users = [], isLoading: isLoadingUsers } = useQuery<User[]>({
     queryKey: ["/api/admin/users"],
@@ -82,6 +89,38 @@ export default function AdminPage() {
     },
     onError: (err) => {
       toast({ title: "Error", description: err instanceof Error ? err.message : "Failed to revoke access", variant: "destructive" });
+    },
+  });
+
+  const createUserMutation = useMutation({
+    mutationFn: async (userData: { email: string; password: string; firstName?: string; lastName?: string; role: UserRole }) => {
+      return apiRequest("POST", "/api/admin/users", userData);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setIsCreateUserDialogOpen(false);
+      setNewUserEmail("");
+      setNewUserPassword("");
+      setNewUserFirstName("");
+      setNewUserLastName("");
+      setNewUserRole("external_customer");
+      toast({ title: "User created", description: "New user account has been created." });
+    },
+    onError: (err) => {
+      toast({ title: "Error", description: err instanceof Error ? err.message : "Failed to create user", variant: "destructive" });
+    },
+  });
+
+  const deleteUserMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      return apiRequest("DELETE", `/api/admin/users/${userId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "User deleted", description: "User account has been removed." });
+    },
+    onError: (err) => {
+      toast({ title: "Error", description: err instanceof Error ? err.message : "Failed to delete user", variant: "destructive" });
     },
   });
 
@@ -149,9 +188,14 @@ export default function AdminPage() {
 
           <TabsContent value="users" className="space-y-4">
             <Card>
-              <CardHeader>
-                <CardTitle>User Management</CardTitle>
-                <CardDescription>Manage user roles and account status</CardDescription>
+              <CardHeader className="flex flex-row items-center justify-between gap-2">
+                <div>
+                  <CardTitle>User Management</CardTitle>
+                  <CardDescription>Manage user roles and account status</CardDescription>
+                </div>
+                <Button onClick={() => setIsCreateUserDialogOpen(true)} data-testid="button-add-user">
+                  <UserPlus className="h-4 w-4 mr-2" /> Add User
+                </Button>
               </CardHeader>
               <CardContent>
                 {isLoadingUsers ? (
@@ -204,6 +248,19 @@ export default function AdminPage() {
                               data-testid={`switch-active-${user.id}`}
                             />
                           </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              if (confirm(`Are you sure you want to delete ${user.email}?`)) {
+                                deleteUserMutation.mutate(user.id);
+                              }
+                            }}
+                            disabled={user.id === currentUser?.id}
+                            data-testid={`button-delete-${user.id}`}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
                         </div>
                       </div>
                     ))}
@@ -372,6 +429,101 @@ export default function AdminPage() {
             >
               {addGrantMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
               Grant Access
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCreateUserDialogOpen} onOpenChange={setIsCreateUserDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create New User</DialogTitle>
+            <DialogDescription>
+              Add a new user account to the system
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="new-first-name">First Name</Label>
+                <Input
+                  id="new-first-name"
+                  value={newUserFirstName}
+                  onChange={(e) => setNewUserFirstName(e.target.value)}
+                  placeholder="John"
+                  data-testid="input-new-first-name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-last-name">Last Name</Label>
+                <Input
+                  id="new-last-name"
+                  value={newUserLastName}
+                  onChange={(e) => setNewUserLastName(e.target.value)}
+                  placeholder="Doe"
+                  data-testid="input-new-last-name"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-email">Email</Label>
+              <Input
+                id="new-email"
+                type="email"
+                value={newUserEmail}
+                onChange={(e) => setNewUserEmail(e.target.value)}
+                placeholder="user@example.com"
+                required
+                data-testid="input-new-email"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-password">Password</Label>
+              <Input
+                id="new-password"
+                type="password"
+                value={newUserPassword}
+                onChange={(e) => setNewUserPassword(e.target.value)}
+                placeholder="Enter password"
+                required
+                data-testid="input-new-password"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-role">Role</Label>
+              <Select value={newUserRole} onValueChange={(value) => setNewUserRole(value as UserRole)}>
+                <SelectTrigger data-testid="select-new-role">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="washos_user">WashOS User</SelectItem>
+                  <SelectItem value="external_customer">External Customer</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCreateUserDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (newUserEmail && newUserPassword) {
+                  createUserMutation.mutate({
+                    email: newUserEmail,
+                    password: newUserPassword,
+                    firstName: newUserFirstName || undefined,
+                    lastName: newUserLastName || undefined,
+                    role: newUserRole,
+                  });
+                }
+              }}
+              disabled={!newUserEmail || !newUserPassword || createUserMutation.isPending}
+              data-testid="button-create-user"
+            >
+              {createUserMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Create User
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -86,49 +86,6 @@ export async function setupAuth(app: Express) {
     })(req, res, next);
   });
 
-  app.post("/api/register", async (req, res) => {
-    try {
-      const { email, password, firstName, lastName } = req.body;
-      
-      if (!email || !password) {
-        return res.status(400).json({ message: "Email and password are required" });
-      }
-      
-      const normalizedEmail = email.toLowerCase().trim();
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(normalizedEmail)) {
-        return res.status(400).json({ message: "Please enter a valid email address" });
-      }
-      
-      if (password.length < 4) {
-        return res.status(400).json({ message: "Password must be at least 4 characters" });
-      }
-      
-      const existingUser = await authStorage.getUserByEmail(normalizedEmail);
-      if (existingUser) {
-        return res.status(400).json({ message: "Unable to create account. Please try a different email." });
-      }
-      
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const user = await authStorage.createUser({
-        email: normalizedEmail,
-        password: hashedPassword,
-        firstName: firstName?.trim(),
-        lastName: lastName?.trim(),
-      });
-      
-      req.logIn(user, (err) => {
-        if (err) {
-          return res.status(500).json({ message: "Registration failed" });
-        }
-        const { password: _, ...userWithoutPassword } = user;
-        return res.json({ user: userWithoutPassword });
-      });
-    } catch (error) {
-      console.error("Registration error:", error);
-      return res.status(500).json({ message: "Registration failed" });
-    }
-  });
 
   app.post("/api/logout", (req, res) => {
     req.logout((err) => {

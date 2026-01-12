@@ -218,6 +218,74 @@ export async function registerRoutes(
     }
   });
   
+  // Create new user (admin only)
+  app.post("/api/admin/users", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const { email, password, firstName, lastName, role } = req.body;
+      
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required" });
+      }
+      
+      const normalizedEmail = email.toLowerCase().trim();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(normalizedEmail)) {
+        return res.status(400).json({ error: "Invalid email format" });
+      }
+      
+      if (password.length < 4) {
+        return res.status(400).json({ error: "Password must be at least 4 characters" });
+      }
+      
+      const existingUser = await authStorage.getUserByEmail(normalizedEmail);
+      if (existingUser) {
+        return res.status(400).json({ error: "Email already exists" });
+      }
+      
+      const bcrypt = await import("bcryptjs");
+      const hashedPassword = await bcrypt.hash(password, 10);
+      
+      const validRole = ["admin", "washos_user", "external_customer"].includes(role) ? role : "external_customer";
+      
+      const [newUser] = await db.insert(users).values({
+        email: normalizedEmail,
+        password: hashedPassword,
+        firstName: firstName?.trim(),
+        lastName: lastName?.trim(),
+        role: validRole,
+      }).returning();
+      
+      const { password: _, ...userWithoutPassword } = newUser;
+      res.json(userWithoutPassword);
+    } catch (err) {
+      console.error("Error creating user:", err);
+      res.status(500).json({ error: "Failed to create user" });
+    }
+  });
+  
+  // Delete user (admin only)
+  app.delete("/api/admin/users/:userId", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const currentUserId = (req.user as any)?.id;
+      
+      if (userId === currentUserId) {
+        return res.status(400).json({ error: "Cannot delete your own account" });
+      }
+      
+      const [deleted] = await db.delete(users).where(eq(users.id, userId)).returning();
+      
+      if (!deleted) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      res.json({ message: "User deleted" });
+    } catch (err) {
+      console.error("Error deleting user:", err);
+      res.status(500).json({ error: "Failed to delete user" });
+    }
+  });
+  
   // Get table grants for a user (admin/washos)
   app.get("/api/admin/grants/:userId", isAuthenticated, requireRole("admin", "washos_user"), async (req: Request, res: Response) => {
     try {

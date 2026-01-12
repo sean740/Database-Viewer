@@ -334,8 +334,20 @@ export async function registerRoutes(
     }
   });
 
-  // Get all table settings (admin only)
+  // Get all table settings (admin only - for full management)
   app.get("/api/admin/table-settings", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const settings = await storage.getAllTableSettings();
+      res.json(settings);
+    } catch (err) {
+      console.error("Error fetching table settings:", err);
+      res.status(500).json({ error: "Failed to fetch table settings" });
+    }
+  });
+
+  // Get table settings for display (read-only, all authenticated users)
+  // This allows non-admins to see which columns are hidden
+  app.get("/api/table-settings", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const settings = await storage.getAllTableSettings();
       res.json(settings);
@@ -348,7 +360,7 @@ export async function registerRoutes(
   // Update table settings (admin only)
   app.post("/api/admin/table-settings", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
     try {
-      const { database, tableName, isVisible, displayName } = req.body;
+      const { database, tableName, isVisible, displayName, hiddenColumns } = req.body;
       
       if (!database || !tableName) {
         return res.status(400).json({ error: "database and tableName are required" });
@@ -357,6 +369,7 @@ export async function registerRoutes(
       await storage.setTableSettings(database, tableName, {
         isVisible: isVisible !== false,
         displayName: displayName || null,
+        hiddenColumns: Array.isArray(hiddenColumns) ? hiddenColumns : undefined,
       });
       
       res.json({ success: true });

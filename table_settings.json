@@ -8,8 +8,8 @@
     "displayName": null
   },
   "Default:public.admins": {
-    "isVisible": false,
-    "displayName": null
+    "isVisible": true,
+    "displayName": "Admins"
   },
   "Default:public.application_parameters": {
     "isVisible": false,
@@ -28,8 +28,8 @@
     "displayName": null
   },
   "Default:public.areas": {
-    "isVisible": false,
-    "displayName": null
+    "isVisible": true,
+    "displayName": "Areas"
   },
   "Default:public.areas_pack_variants": {
     "isVisible": false,
@@ -88,8 +88,8 @@
     "displayName": null
   },
   "Default:public.booking_ratings": {
-    "isVisible": false,
-    "displayName": null
+    "isVisible": true,
+    "displayName": "Ratings"
   },
   "Default:public.booking_refunds": {
     "isVisible": false,
@@ -108,8 +108,8 @@
     "displayName": null
   },
   "Default:public.bookings": {
-    "isVisible": false,
-    "displayName": null
+    "isVisible": true,
+    "displayName": "Bookings"
   },
   "Default:public.bookings_vendors": {
     "isVisible": false,
@@ -200,8 +200,8 @@
     "displayName": null
   },
   "Default:public.gift_cards": {
-    "isVisible": false,
-    "displayName": null
+    "isVisible": true,
+    "displayName": "Gift Cards"
   },
   "Default:public.groupon_redeems": {
     "isVisible": false,
@@ -280,6 +280,202 @@
     "displayName": null
   },
   "Default:public.price_plans": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.products": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.public_reviews": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.referral_promos": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.regions": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.rescheduled_bookings": {
+    "isVisible": true,
+    "displayName": "Rescheduled Bookings"
+  },
+  "Default:public.rescheduling_requests": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.reward_tiers": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.satisfaction_policies": {
+    "isVisible": true,
+    "displayName": "Satisfaction Policies"
+  },
+  "Default:public.scheduled_calls": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.schema_migrations": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.sellable_value_logs": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.seo_location_pages": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.sharing_coupon_usages": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.smartcars": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.subscription_invoices": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.subscription_settings": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.subscription_usages": {
+    "isVisible": true,
+    "displayName": "Subscription Bookings"
+  },
+  "Default:public.subscriptions": {
+    "isVisible": true,
+    "displayName": "Subscriptions"
+  },
+  "Default:public.surge_price_levels": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.survey_logs": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.target_customers": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.user_credit_earnings": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.user_credit_spendings": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.user_credits": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.user_credits_transaction_types": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.user_credits_transactions": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.user_discounts": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.user_messages": {
+    "isVisible": false,
+    "displayName": "Customer Messages"
+  },
+  "Default:public.user_no_shows": {
+    "isVisible": true,
+    "displayName": "Customer No-Shows"
+  },
+  "Default:public.user_packs": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.user_rewards": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.user_vendors": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.users": {
+    "isVisible": true,
+    "displayName": "Customers"
+  },
+  "Default:public.vendor_balance_transactions": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_booking_option_eligibilities": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_booking_option_fees": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_car_type_fees": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_emergencies": {
+    "isVisible": true,
+    "displayName": "Emergencies"
+  },
+  "Default:public.vendor_emergency_bookings": {
+    "isVisible": true,
+    "displayName": "Bookings Impacted by Emergencies"
+  },
+  "Default:public.vendor_experiences": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_knowledge_card_statuses": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_knowledge_cards": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_levels": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_onboardings": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_pack_eligibilities": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_pack_fees": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_schedule_templates": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_schedules": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.vendor_transfers": {
     "isVisible": false,
     "displayName": null
   }

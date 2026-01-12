@@ -88,4 +88,5 @@ export interface TableSettings {
   tableName: string;
   isVisible: boolean;
   displayName: string | null;
+  hiddenColumns?: string[];
 }

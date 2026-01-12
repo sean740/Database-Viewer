@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 
 import { Header } from "@/components/header";
 import { TableSidebar } from "@/components/table-sidebar";
@@ -23,8 +24,18 @@ import type {
   NLQPlan,
 } from "@/lib/types";
 
+interface TableSettingsMap {
+  [key: string]: {
+    isVisible: boolean;
+    displayName: string | null;
+    hiddenColumns?: string[];
+  };
+}
+
 export default function DatabaseViewer() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
 
   // State
   const [selectedDatabase, setSelectedDatabase] = useState("");
@@ -69,6 +80,50 @@ export default function DatabaseViewer() {
   const { data: filterDefinitions = [] } = useQuery<FilterDefinition[]>({
     queryKey: ["/api/filters", selectedTable],
     enabled: !!selectedTable,
+  });
+
+  // Fetch table settings (for column visibility) - all users can access read-only settings
+  const { data: tableSettings = {} } = useQuery<TableSettingsMap>({
+    queryKey: ["/api/table-settings"],
+  });
+
+  // Get hidden columns for current table
+  const settingsKey = selectedDatabase && selectedTable ? `${selectedDatabase}:${selectedTable}` : "";
+  const currentTableSettings = tableSettings[settingsKey];
+  const hiddenColumns = currentTableSettings?.hiddenColumns || [];
+
+  // Filter columns to only show visible ones
+  const visibleColumns = useMemo(() => {
+    if (hiddenColumns.length === 0) return columns;
+    return columns.filter((col) => !hiddenColumns.includes(col.name));
+  }, [columns, hiddenColumns]);
+
+  // Mutation to save column visibility
+  const saveColumnsMutation = useMutation({
+    mutationFn: async (newHiddenColumns: string[]) => {
+      return apiRequest("POST", "/api/admin/table-settings", {
+        database: selectedDatabase,
+        tableName: selectedTable,
+        isVisible: currentTableSettings?.isVisible !== false,
+        displayName: currentTableSettings?.displayName || null,
+        hiddenColumns: newHiddenColumns,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/table-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/table-settings"] });
+      toast({
+        title: "Column visibility saved",
+        description: "The column settings have been updated.",
+      });
+    },
+    onError: (err) => {
+      toast({
+        title: "Failed to save columns",
+        description: err instanceof Error ? err.message : "An error occurred",
+        variant: "destructive",
+      });
+    },
   });
 
   // Fetch rows
@@ -242,6 +297,13 @@ export default function DatabaseViewer() {
     [saveFiltersMutation]
   );
 
+  const handleSaveColumns = useCallback(
+    (newHiddenColumns: string[]) => {
+      saveColumnsMutation.mutate(newHiddenColumns);
+    },
+    [saveColumnsMutation]
+  );
+
   const isLoading = isLoadingDatabases || isLoadingTables || isLoadingColumns || isLoadingRows;
 
   return (
@@ -277,6 +339,10 @@ export default function DatabaseViewer() {
               onOpenSettings={() => setIsSettingsOpen(true)}
               isLoading={isLoadingRows}
               isExporting={isExporting}
+              columns={columns}
+              hiddenColumns={hiddenColumns}
+              onSaveColumns={handleSaveColumns}
+              isSavingColumns={saveColumnsMutation.isPending}
             />
           )}
 
@@ -301,7 +367,7 @@ export default function DatabaseViewer() {
             )}
 
             <DataTable
-              columns={columns}
+              columns={visibleColumns}
               rows={queryResult?.rows || []}
               isLoading={isLoadingRows}
             />

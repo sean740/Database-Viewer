@@ -12,6 +12,7 @@ export interface FiltersConfig {
 export interface TableSettingsEntry {
   isVisible: boolean;
   displayName: string | null;
+  hiddenColumns?: string[];
 }
 
 export interface TableSettingsConfig {

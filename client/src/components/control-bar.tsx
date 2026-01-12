@@ -1,5 +1,7 @@
 import { RefreshCw, Download, Settings, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ColumnSelector } from "@/components/column-selector";
+import type { ColumnInfo } from "@/lib/types";
 
 interface ControlBarProps {
   selectedTable: string;
@@ -11,6 +13,10 @@ interface ControlBarProps {
   onOpenSettings: () => void;
   isLoading: boolean;
   isExporting: boolean;
+  columns: ColumnInfo[];
+  hiddenColumns: string[];
+  onSaveColumns: (hiddenColumns: string[]) => void;
+  isSavingColumns?: boolean;
 }
 
 export function ControlBar({
@@ -23,6 +29,10 @@ export function ControlBar({
   onOpenSettings,
   isLoading,
   isExporting,
+  columns,
+  hiddenColumns,
+  onSaveColumns,
+  isSavingColumns = false,
 }: ControlBarProps) {
   return (
     <div className="flex items-center justify-between px-4 py-3 border-b bg-card gap-4">
@@ -38,6 +48,14 @@ export function ControlBar({
       </div>
 
       <div className="flex items-center gap-2">
+        <ColumnSelector
+          columns={columns}
+          hiddenColumns={hiddenColumns}
+          onSave={onSaveColumns}
+          isSaving={isSavingColumns}
+          disabled={!selectedTable}
+        />
+
         <Button
           variant="outline"
           size="sm"

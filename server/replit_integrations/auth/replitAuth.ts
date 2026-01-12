@@ -39,16 +39,13 @@ export async function setupAuth(app: Express) {
       { usernameField: "email", passwordField: "password" },
       async (email, password, done) => {
         try {
-          const user = await authStorage.getUserByEmail(email);
-          if (!user) {
+          const normalizedEmail = email.toLowerCase().trim();
+          const user = await authStorage.getUserByEmail(normalizedEmail);
+          
+          if (!user || !user.password || !user.isActive) {
             return done(null, false, { message: "Invalid email or password" });
           }
-          if (!user.password) {
-            return done(null, false, { message: "Invalid email or password" });
-          }
-          if (!user.isActive) {
-            return done(null, false, { message: "Account is deactivated" });
-          }
+          
           const isMatch = await bcrypt.compare(password, user.password);
           if (!isMatch) {
             return done(null, false, { message: "Invalid email or password" });
@@ -97,17 +94,27 @@ export async function setupAuth(app: Express) {
         return res.status(400).json({ message: "Email and password are required" });
       }
       
-      const existingUser = await authStorage.getUserByEmail(email);
+      const normalizedEmail = email.toLowerCase().trim();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(normalizedEmail)) {
+        return res.status(400).json({ message: "Please enter a valid email address" });
+      }
+      
+      if (password.length < 4) {
+        return res.status(400).json({ message: "Password must be at least 4 characters" });
+      }
+      
+      const existingUser = await authStorage.getUserByEmail(normalizedEmail);
       if (existingUser) {
-        return res.status(400).json({ message: "Email already registered" });
+        return res.status(400).json({ message: "Unable to create account. Please try a different email." });
       }
       
       const hashedPassword = await bcrypt.hash(password, 10);
       const user = await authStorage.createUser({
-        email,
+        email: normalizedEmail,
         password: hashedPassword,
-        firstName,
-        lastName,
+        firstName: firstName?.trim(),
+        lastName: lastName?.trim(),
       });
       
       req.logIn(user, (err) => {

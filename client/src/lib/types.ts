@@ -1,0 +1,59 @@
+export interface DatabaseConnection {
+  name: string;
+  url: string;
+}
+
+export interface TableInfo {
+  schema: string;
+  name: string;
+  fullName: string;
+}
+
+export interface ColumnInfo {
+  name: string;
+  dataType: string;
+  isNullable: boolean;
+  isPrimaryKey: boolean;
+}
+
+export type FilterOperator = "eq" | "contains" | "gt" | "gte" | "lt" | "lte";
+
+export interface FilterDefinition {
+  id: string;
+  name: string;
+  column: string;
+  operator: FilterOperator;
+}
+
+export interface ActiveFilter {
+  column: string;
+  operator: FilterOperator;
+  value: string;
+}
+
+export interface QueryResponse {
+  rows: Record<string, unknown>[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export interface NLQPlan {
+  table: string;
+  page: number;
+  filters: Array<{
+    column: string;
+    op: FilterOperator;
+    value: string;
+  }>;
+}
+
+export const OPERATOR_LABELS: Record<FilterOperator, string> = {
+  eq: "equals",
+  contains: "contains",
+  gt: "greater than",
+  gte: "greater than or equal",
+  lt: "less than",
+  lte: "less than or equal",
+};

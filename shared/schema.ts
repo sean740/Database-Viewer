@@ -1,18 +1,98 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+// Database connection from environment
+export const databaseConnectionSchema = z.object({
+  name: z.string(),
+  url: z.string(),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
+export type DatabaseConnection = z.infer<typeof databaseConnectionSchema>;
+
+// Table info from database
+export const tableInfoSchema = z.object({
+  schema: z.string(),
+  name: z.string(),
+  fullName: z.string(), // schema.table
 });
 
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
+export type TableInfo = z.infer<typeof tableInfoSchema>;
+
+// Column info from database
+export const columnInfoSchema = z.object({
+  name: z.string(),
+  dataType: z.string(),
+  isNullable: z.boolean(),
+  isPrimaryKey: z.boolean(),
+});
+
+export type ColumnInfo = z.infer<typeof columnInfoSchema>;
+
+// Filter operator types
+export const filterOperatorSchema = z.enum(["eq", "contains", "gt", "gte", "lt", "lte"]);
+export type FilterOperator = z.infer<typeof filterOperatorSchema>;
+
+// Filter definition (admin-configured)
+export const filterDefinitionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  column: z.string(),
+  operator: filterOperatorSchema,
+});
+
+export type FilterDefinition = z.infer<typeof filterDefinitionSchema>;
+
+// Active filter (user-applied value)
+export const activeFilterSchema = z.object({
+  column: z.string(),
+  operator: filterOperatorSchema,
+  value: z.string(),
+});
+
+export type ActiveFilter = z.infer<typeof activeFilterSchema>;
+
+// Query request for fetching rows
+export const queryRequestSchema = z.object({
+  database: z.string(),
+  table: z.string(),
+  page: z.number().int().positive().default(1),
+  filters: z.array(activeFilterSchema).optional(),
+});
+
+export type QueryRequest = z.infer<typeof queryRequestSchema>;
+
+// Query response
+export const queryResponseSchema = z.object({
+  rows: z.array(z.record(z.unknown())),
+  totalCount: z.number(),
+  page: z.number(),
+  pageSize: z.number(),
+  totalPages: z.number(),
+});
+
+export type QueryResponse = z.infer<typeof queryResponseSchema>;
+
+// NLQ (Natural Language Query) request
+export const nlqRequestSchema = z.object({
+  database: z.string(),
+  table: z.string().optional(),
+  query: z.string(),
+});
+
+export type NLQRequest = z.infer<typeof nlqRequestSchema>;
+
+// NLQ parsed plan from OpenAI
+export const nlqPlanSchema = z.object({
+  table: z.string(),
+  page: z.number().default(1),
+  filters: z.array(z.object({
+    column: z.string(),
+    op: filterOperatorSchema,
+    value: z.string(),
+  })),
+});
+
+export type NLQPlan = z.infer<typeof nlqPlanSchema>;
+
+// Filters config file structure
+export const filtersConfigSchema = z.record(z.string(), z.array(filterDefinitionSchema));
+export type FiltersConfig = z.infer<typeof filtersConfigSchema>;

@@ -183,10 +183,15 @@ export async function registerRoutes(
 
   // Get columns for a table
   app.get(
-    "/api/columns/:database/:schema/:table",
+    "/api/columns/:database/:fullTable",
     async (req: Request, res: Response) => {
       try {
-        const { database, schema, table } = req.params;
+        const { database, fullTable } = req.params;
+        
+        const [schema, table] = fullTable.split(".");
+        if (!schema || !table) {
+          return res.status(400).json({ error: "Invalid table name format. Expected schema.table" });
+        }
 
         validateIdentifier(schema, "schema");
         validateIdentifier(table, "table");

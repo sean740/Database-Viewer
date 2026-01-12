@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -61,6 +61,13 @@ export default function AdminPage() {
   const { data: tableSettings = {} } = useQuery<Record<string, { isVisible: boolean; displayName: string | null }>>({
     queryKey: ["/api/admin/table-settings"],
   });
+
+  // Auto-select first database for visibility tab
+  useEffect(() => {
+    if (databases.length > 0 && !visibilityDatabase) {
+      setVisibilityDatabase(databases[0].name);
+    }
+  }, [databases, visibilityDatabase]);
 
   const updateUserMutation = useMutation({
     mutationFn: async ({ userId, updates }: { userId: string; updates: { role?: UserRole; isActive?: boolean } }) => {

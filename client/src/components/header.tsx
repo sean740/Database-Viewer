@@ -100,11 +100,13 @@ export function Header({
                 <DropdownMenuSeparator />
               </>
             )}
-            <DropdownMenuItem asChild>
-              <a href="/api/logout" className="flex items-center cursor-pointer text-destructive" data-testid="link-logout">
-                <LogOut className="mr-2 h-4 w-4" />
-                Sign Out
-              </a>
+            <DropdownMenuItem 
+              onClick={() => logout()} 
+              className="flex items-center cursor-pointer text-destructive" 
+              data-testid="link-logout"
+            >
+              <LogOut className="mr-2 h-4 w-4" />
+              Sign Out
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

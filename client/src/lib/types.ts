@@ -7,6 +7,8 @@ export interface TableInfo {
   schema: string;
   name: string;
   fullName: string;
+  displayName?: string | null;
+  isVisible?: boolean;
 }
 
 export interface ColumnInfo {
@@ -79,4 +81,11 @@ export interface TableGrant {
   tableName: string;
   grantedBy: string;
   grantedAt: Date | null;
+}
+
+export interface TableSettings {
+  database: string;
+  tableName: string;
+  isVisible: boolean;
+  displayName: string | null;
 }

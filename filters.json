@@ -1,1 +1,10 @@
-{}
+{
+  "public.booking_ratings": [
+    {
+      "id": "filter-1768258733465",
+      "name": "5",
+      "column": "rating",
+      "operator": "eq"
+    }
+  ]
+}

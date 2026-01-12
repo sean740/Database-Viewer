@@ -20,9 +20,13 @@ export function TableSidebar({
 }: TableSidebarProps) {
   const [search, setSearch] = useState("");
 
-  const filteredTables = tables.filter((t) =>
-    t.fullName.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredTables = tables.filter((t) => {
+    const searchLower = search.toLowerCase();
+    return (
+      t.fullName.toLowerCase().includes(searchLower) ||
+      (t.displayName && t.displayName.toLowerCase().includes(searchLower))
+    );
+  });
 
   return (
     <aside className="w-64 border-r bg-sidebar flex flex-col h-full">
@@ -59,15 +63,24 @@ export function TableSidebar({
                   key={table.fullName}
                   onClick={() => onTableSelect(table.fullName)}
                   className={cn(
-                    "w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm text-left transition-colors hover-elevate",
+                    "w-full flex flex-col gap-0.5 px-3 py-2 rounded-md text-sm text-left transition-colors hover-elevate",
                     selectedTable === table.fullName
                       ? "bg-sidebar-accent text-sidebar-accent-foreground"
                       : "text-sidebar-foreground"
                   )}
                   data-testid={`button-table-${table.fullName}`}
                 >
-                  <Table2 className="h-4 w-4 shrink-0" />
-                  <span className="font-mono text-xs truncate">{table.fullName}</span>
+                  <div className="flex items-center gap-2">
+                    <Table2 className="h-4 w-4 shrink-0" />
+                    <span className="text-xs truncate">
+                      {table.displayName || table.fullName}
+                    </span>
+                  </div>
+                  {table.displayName && (
+                    <span className="font-mono text-[10px] text-muted-foreground truncate ml-6">
+                      {table.fullName}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>

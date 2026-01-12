@@ -333,6 +333,38 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to delete grant" });
     }
   });
+
+  // Get all table settings (admin only)
+  app.get("/api/admin/table-settings", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const settings = await storage.getAllTableSettings();
+      res.json(settings);
+    } catch (err) {
+      console.error("Error fetching table settings:", err);
+      res.status(500).json({ error: "Failed to fetch table settings" });
+    }
+  });
+
+  // Update table settings (admin only)
+  app.post("/api/admin/table-settings", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const { database, tableName, isVisible, displayName } = req.body;
+      
+      if (!database || !tableName) {
+        return res.status(400).json({ error: "database and tableName are required" });
+      }
+      
+      await storage.setTableSettings(database, tableName, {
+        isVisible: isVisible !== false,
+        displayName: displayName || null,
+      });
+      
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Error updating table settings:", err);
+      res.status(500).json({ error: "Failed to update table settings" });
+    }
+  });
   
   // Get current user with role info
   app.get("/api/auth/me", isAuthenticated, async (req: Request, res: Response) => {
@@ -375,6 +407,7 @@ export async function registerRoutes(
       }
       
       const pool = getPool(database);
+      const allTableSettings = await storage.getAllTableSettings();
 
       const result = await pool.query(`
         SELECT table_schema, table_name
@@ -384,16 +417,28 @@ export async function registerRoutes(
         ORDER BY table_schema, table_name
       `);
 
-      let tables: TableInfo[] = result.rows.map((row) => ({
-        schema: row.table_schema,
-        name: row.table_name,
-        fullName: `${row.table_schema}.${row.table_name}`,
-      }));
+      let tables: TableInfo[] = result.rows.map((row) => {
+        const fullName = `${row.table_schema}.${row.table_name}`;
+        const settingsKey = `${database}:${fullName}`;
+        const settings = allTableSettings[settingsKey];
+        return {
+          schema: row.table_schema,
+          name: row.table_name,
+          fullName,
+          displayName: settings?.displayName || null,
+          isVisible: settings?.isVisible !== false,
+        };
+      });
       
       // For external customers, filter to only granted tables
       if (user.role === "external_customer") {
         const allowedTables = await getAllowedTables(userId);
         tables = tables.filter(t => allowedTables.includes(`${database}:${t.fullName}`));
+      }
+      
+      // For non-admins, filter out hidden tables
+      if (user.role !== "admin") {
+        tables = tables.filter(t => t.isVisible !== false);
       }
 
       res.json(tables);

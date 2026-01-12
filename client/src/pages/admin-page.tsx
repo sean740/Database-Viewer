@@ -13,8 +13,8 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ArrowLeft, Users, Table, Shield, Trash2, Plus, Loader2, UserPlus } from "lucide-react";
-import type { User, TableGrant, UserRole, DatabaseConnection, TableInfo } from "@/lib/types";
+import { ArrowLeft, Users, Table, Shield, Trash2, Plus, Loader2, UserPlus, Eye, EyeOff, Pencil } from "lucide-react";
+import type { User, TableGrant, UserRole, DatabaseConnection, TableInfo, TableSettings } from "@/lib/types";
 
 export default function AdminPage() {
   const [, navigate] = useLocation();
@@ -30,6 +30,9 @@ export default function AdminPage() {
   const [newUserFirstName, setNewUserFirstName] = useState("");
   const [newUserLastName, setNewUserLastName] = useState("");
   const [newUserRole, setNewUserRole] = useState<UserRole>("external_customer");
+  const [visibilityDatabase, setVisibilityDatabase] = useState("");
+  const [editingDisplayName, setEditingDisplayName] = useState<string | null>(null);
+  const [displayNameValue, setDisplayNameValue] = useState("");
 
   const { data: users = [], isLoading: isLoadingUsers } = useQuery<User[]>({
     queryKey: ["/api/admin/users"],
@@ -48,6 +51,15 @@ export default function AdminPage() {
   const { data: selectedUserGrants = [] } = useQuery<TableGrant[]>({
     queryKey: ["/api/admin/grants", selectedUserId],
     enabled: !!selectedUserId,
+  });
+
+  const { data: visibilityTables = [], isLoading: isLoadingVisibilityTables } = useQuery<TableInfo[]>({
+    queryKey: ["/api/tables", visibilityDatabase],
+    enabled: !!visibilityDatabase,
+  });
+
+  const { data: tableSettings = {} } = useQuery<Record<string, { isVisible: boolean; displayName: string | null }>>({
+    queryKey: ["/api/admin/table-settings"],
   });
 
   const updateUserMutation = useMutation({
@@ -124,6 +136,21 @@ export default function AdminPage() {
     },
   });
 
+  const updateTableSettingsMutation = useMutation({
+    mutationFn: async (data: { database: string; tableName: string; isVisible: boolean; displayName: string | null }) => {
+      return apiRequest("POST", "/api/admin/table-settings", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/table-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tables"] });
+      setEditingDisplayName(null);
+      toast({ title: "Settings updated", description: "Table settings have been saved." });
+    },
+    onError: (err) => {
+      toast({ title: "Error", description: err instanceof Error ? err.message : "Failed to update settings", variant: "destructive" });
+    },
+  });
+
   if (isAuthLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -183,6 +210,9 @@ export default function AdminPage() {
             </TabsTrigger>
             <TabsTrigger value="access" className="gap-2" data-testid="tab-access">
               <Table className="h-4 w-4" /> Table Access
+            </TabsTrigger>
+            <TabsTrigger value="visibility" className="gap-2" data-testid="tab-visibility">
+              <Eye className="h-4 w-4" /> Table Visibility
             </TabsTrigger>
           </TabsList>
 
@@ -366,6 +396,158 @@ export default function AdminPage() {
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
+
+          <TabsContent value="visibility" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Table Visibility & Display Names</CardTitle>
+                <CardDescription>
+                  Control which tables are visible to non-admin users and set custom display names
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Select Database</Label>
+                  <Select value={visibilityDatabase} onValueChange={setVisibilityDatabase}>
+                    <SelectTrigger data-testid="select-visibility-database">
+                      <SelectValue placeholder="Select a database" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {databases.map((db) => (
+                        <SelectItem key={db.name} value={db.name}>
+                          {db.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {visibilityDatabase && (
+                  <div className="space-y-2">
+                    {isLoadingVisibilityTables ? (
+                      <div className="flex justify-center py-8">
+                        <Loader2 className="h-6 w-6 animate-spin" />
+                      </div>
+                    ) : visibilityTables.length === 0 ? (
+                      <p className="text-sm text-muted-foreground text-center py-4">
+                        No tables found in this database
+                      </p>
+                    ) : (
+                      <div className="border rounded-lg divide-y">
+                        {visibilityTables.map((table) => {
+                          const settingsKey = `${visibilityDatabase}:${table.fullName}`;
+                          const settings = tableSettings[settingsKey];
+                          const isVisible = settings?.isVisible !== false;
+                          const displayName = settings?.displayName || null;
+                          const isEditing = editingDisplayName === settingsKey;
+
+                          return (
+                            <div
+                              key={table.fullName}
+                              className="flex items-center justify-between p-4"
+                              data-testid={`table-settings-${table.fullName}`}
+                            >
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <Table className="h-4 w-4 text-muted-foreground shrink-0" />
+                                  <span className="font-mono text-sm truncate">{table.fullName}</span>
+                                </div>
+                                {isEditing ? (
+                                  <div className="flex items-center gap-2 mt-2">
+                                    <Input
+                                      value={displayNameValue}
+                                      onChange={(e) => setDisplayNameValue(e.target.value)}
+                                      placeholder="Enter display name"
+                                      className="h-8 text-sm"
+                                      data-testid={`input-display-name-${table.fullName}`}
+                                    />
+                                    <Button
+                                      size="sm"
+                                      onClick={() => {
+                                        updateTableSettingsMutation.mutate({
+                                          database: visibilityDatabase,
+                                          tableName: table.fullName,
+                                          isVisible,
+                                          displayName: displayNameValue || null,
+                                        });
+                                      }}
+                                      disabled={updateTableSettingsMutation.isPending}
+                                      data-testid={`button-save-display-name-${table.fullName}`}
+                                    >
+                                      Save
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => setEditingDisplayName(null)}
+                                      data-testid={`button-cancel-display-name-${table.fullName}`}
+                                    >
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                ) : displayName ? (
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <span className="text-sm text-muted-foreground">Display name:</span>
+                                    <span className="text-sm font-medium">{displayName}</span>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-6 w-6"
+                                      onClick={() => {
+                                        setEditingDisplayName(settingsKey);
+                                        setDisplayNameValue(displayName);
+                                      }}
+                                      data-testid={`button-edit-display-name-${table.fullName}`}
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <Button
+                                    variant="ghost"
+                                    className="h-auto p-0 mt-1 text-sm text-primary"
+                                    onClick={() => {
+                                      setEditingDisplayName(settingsKey);
+                                      setDisplayNameValue("");
+                                    }}
+                                    data-testid={`button-add-display-name-${table.fullName}`}
+                                  >
+                                    <Pencil className="h-3 w-3 mr-1" /> Set display name
+                                  </Button>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 ml-4">
+                                <span className="text-sm text-muted-foreground">
+                                  {isVisible ? "Visible" : "Hidden"}
+                                </span>
+                                <Switch
+                                  checked={isVisible}
+                                  onCheckedChange={(checked) => {
+                                    updateTableSettingsMutation.mutate({
+                                      database: visibilityDatabase,
+                                      tableName: table.fullName,
+                                      isVisible: checked,
+                                      displayName,
+                                    });
+                                  }}
+                                  data-testid={`switch-visibility-${table.fullName}`}
+                                />
+                                {isVisible ? (
+                                  <Eye className="h-4 w-4 text-muted-foreground" />
+                                ) : (
+                                  <EyeOff className="h-4 w-4 text-muted-foreground" />
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </main>

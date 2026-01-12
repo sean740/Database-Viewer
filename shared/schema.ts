@@ -13,6 +13,8 @@ export const tableInfoSchema = z.object({
   schema: z.string(),
   name: z.string(),
   fullName: z.string(), // schema.table
+  displayName: z.string().nullable().optional(),
+  isVisible: z.boolean().optional(),
 });
 
 export type TableInfo = z.infer<typeof tableInfoSchema>;

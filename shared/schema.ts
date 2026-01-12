@@ -96,3 +96,6 @@ export type NLQPlan = z.infer<typeof nlqPlanSchema>;
 // Filters config file structure
 export const filtersConfigSchema = z.record(z.string(), z.array(filterDefinitionSchema));
 export type FiltersConfig = z.infer<typeof filtersConfigSchema>;
+
+// Export auth models
+export * from "./models/auth";

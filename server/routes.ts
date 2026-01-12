@@ -2,7 +2,11 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { Pool } from "pg";
 import OpenAI from "openai";
+import { eq } from "drizzle-orm";
 import { storage } from "./storage";
+import { db } from "./db";
+import { setupAuth, registerAuthRoutes, isAuthenticated, authStorage } from "./replit_integrations/auth";
+import { users, tableGrants, type UserRole, type User } from "@shared/schema";
 import type {
   DatabaseConnection,
   TableInfo,
@@ -136,12 +140,151 @@ function getOpenAIClient(): OpenAI | null {
   return openai;
 }
 
+// Middleware to check user role
+function requireRole(...allowedRoles: UserRole[]) {
+  return async (req: Request, res: Response, next: Function) => {
+    const userId = (req.user as any)?.claims?.sub;
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    
+    const user = await authStorage.getUser(userId);
+    if (!user || !user.isActive) {
+      return res.status(403).json({ error: "Account is inactive" });
+    }
+    
+    if (!allowedRoles.includes(user.role as UserRole)) {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
+    
+    (req as any).currentUser = user;
+    next();
+  };
+}
+
+// Get allowed tables for a user (for external customers)
+async function getAllowedTables(userId: string): Promise<string[]> {
+  const grants = await db.select().from(tableGrants).where(eq(tableGrants.userId, userId));
+  return grants.map(g => `${g.database}:${g.tableName}`);
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Setup auth BEFORE other routes
+  await setupAuth(app);
+  registerAuthRoutes(app);
+  
+  // ========== ADMIN ROUTES ==========
+  
+  // Get all users (admin only)
+  app.get("/api/admin/users", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const allUsers = await db.select().from(users);
+      res.json(allUsers);
+    } catch (err) {
+      console.error("Error fetching users:", err);
+      res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+  
+  // Update user role/status (admin only)
+  app.patch("/api/admin/users/:userId", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const { role, isActive } = req.body;
+      
+      const updates: Partial<{ role: UserRole; isActive: boolean; updatedAt: Date }> = { updatedAt: new Date() };
+      
+      if (role && ["admin", "washos_user", "external_customer"].includes(role)) {
+        updates.role = role;
+      }
+      
+      if (typeof isActive === "boolean") {
+        updates.isActive = isActive;
+      }
+      
+      const [updated] = await db.update(users).set(updates).where(eq(users.id, userId)).returning();
+      
+      if (!updated) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      res.json(updated);
+    } catch (err) {
+      console.error("Error updating user:", err);
+      res.status(500).json({ error: "Failed to update user" });
+    }
+  });
+  
+  // Get table grants for a user (admin/washos)
+  app.get("/api/admin/grants/:userId", isAuthenticated, requireRole("admin", "washos_user"), async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const grants = await db.select().from(tableGrants).where(eq(tableGrants.userId, userId));
+      res.json(grants);
+    } catch (err) {
+      console.error("Error fetching grants:", err);
+      res.status(500).json({ error: "Failed to fetch grants" });
+    }
+  });
+  
+  // Add table grant for a user (admin/washos)
+  app.post("/api/admin/grants", isAuthenticated, requireRole("admin", "washos_user"), async (req: Request, res: Response) => {
+    try {
+      const { userId, database, tableName } = req.body;
+      const grantedBy = (req.user as any)?.claims?.sub;
+      
+      if (!userId || !database || !tableName) {
+        return res.status(400).json({ error: "userId, database, and tableName are required" });
+      }
+      
+      const [grant] = await db.insert(tableGrants).values({
+        userId,
+        database,
+        tableName,
+        grantedBy,
+      }).returning();
+      
+      res.json(grant);
+    } catch (err) {
+      console.error("Error creating grant:", err);
+      res.status(500).json({ error: "Failed to create grant" });
+    }
+  });
+  
+  // Delete table grant (admin/washos)
+  app.delete("/api/admin/grants/:grantId", isAuthenticated, requireRole("admin", "washos_user"), async (req: Request, res: Response) => {
+    try {
+      const { grantId } = req.params;
+      await db.delete(tableGrants).where(eq(tableGrants.id, grantId));
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Error deleting grant:", err);
+      res.status(500).json({ error: "Failed to delete grant" });
+    }
+  });
+  
+  // Get current user with role info
+  app.get("/api/auth/me", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.user as any)?.claims?.sub;
+      const user = await authStorage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      res.json(user);
+    } catch (err) {
+      console.error("Error fetching current user:", err);
+      res.status(500).json({ error: "Failed to fetch user" });
+    }
+  });
+
+  // ========== DATABASE VIEWER ROUTES ==========
+
   // Get available databases
-  app.get("/api/databases", (req: Request, res: Response) => {
+  app.get("/api/databases", isAuthenticated, (req: Request, res: Response) => {
     try {
       const dbs = getDatabaseConnections();
       // Return only names, not URLs for security
@@ -153,9 +296,16 @@ export async function registerRoutes(
   });
 
   // Get tables for a database
-  app.get("/api/tables/:database", async (req: Request, res: Response) => {
+  app.get("/api/tables/:database", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const { database } = req.params;
+      const userId = (req.user as any)?.claims?.sub;
+      const user = await authStorage.getUser(userId);
+      
+      if (!user || !user.isActive) {
+        return res.status(403).json({ error: "Account is inactive" });
+      }
+      
       const pool = getPool(database);
 
       const result = await pool.query(`
@@ -166,11 +316,17 @@ export async function registerRoutes(
         ORDER BY table_schema, table_name
       `);
 
-      const tables: TableInfo[] = result.rows.map((row) => ({
+      let tables: TableInfo[] = result.rows.map((row) => ({
         schema: row.table_schema,
         name: row.table_name,
         fullName: `${row.table_schema}.${row.table_name}`,
       }));
+      
+      // For external customers, filter to only granted tables
+      if (user.role === "external_customer") {
+        const allowedTables = await getAllowedTables(userId);
+        tables = tables.filter(t => allowedTables.includes(`${database}:${t.fullName}`));
+      }
 
       res.json(tables);
     } catch (err) {
@@ -184,9 +340,20 @@ export async function registerRoutes(
   // Get columns for a table
   app.get(
     "/api/columns/:database/:fullTable",
+    isAuthenticated,
     async (req: Request, res: Response) => {
       try {
         const { database, fullTable } = req.params;
+        
+        // Check table access for external customers
+        const userId = (req.user as any)?.claims?.sub;
+        const user = await authStorage.getUser(userId);
+        if (user?.role === "external_customer") {
+          const allowedTables = await getAllowedTables(userId);
+          if (!allowedTables.includes(`${database}:${fullTable}`)) {
+            return res.status(403).json({ error: "You don't have access to this table" });
+          }
+        }
         
         const [schema, table] = fullTable.split(".");
         if (!schema || !table) {
@@ -268,9 +435,19 @@ export async function registerRoutes(
   });
 
   // Fetch rows with pagination and filters
-  app.post("/api/rows", async (req: Request, res: Response) => {
+  app.post("/api/rows", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const { database, table, page = 1, filters = [] } = req.body;
+      
+      // Check table access for external customers
+      const userId = (req.user as any)?.claims?.sub;
+      const user = await authStorage.getUser(userId);
+      if (user?.role === "external_customer") {
+        const allowedTables = await getAllowedTables(userId);
+        if (!allowedTables.includes(`${database}:${table}`)) {
+          return res.status(403).json({ error: "You don't have access to this table" });
+        }
+      }
 
       if (!database || !table) {
         return res.status(400).json({ error: "Database and table are required" });
@@ -367,12 +544,22 @@ export async function registerRoutes(
   });
 
   // Export CSV
-  app.get("/api/export", async (req: Request, res: Response) => {
+  app.get("/api/export", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const { database, table, page = "1", filters: filtersJson } = req.query;
 
       if (!database || !table) {
         return res.status(400).json({ error: "Database and table are required" });
+      }
+      
+      // Check table access for external customers
+      const userId = (req.user as any)?.claims?.sub;
+      const user = await authStorage.getUser(userId);
+      if (user?.role === "external_customer") {
+        const allowedTables = await getAllowedTables(userId);
+        if (!allowedTables.includes(`${database}:${table}`)) {
+          return res.status(403).json({ error: "You don't have access to this table" });
+        }
       }
 
       const [schema, tableName] = (table as string).split(".");
@@ -487,13 +674,13 @@ export async function registerRoutes(
   });
 
   // NLQ status
-  app.get("/api/nlq/status", (req: Request, res: Response) => {
+  app.get("/api/nlq/status", isAuthenticated, (req: Request, res: Response) => {
     const client = getOpenAIClient();
     res.json({ enabled: client !== null });
   });
 
   // Natural Language Query
-  app.post("/api/nlq", async (req: Request, res: Response) => {
+  app.post("/api/nlq", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const { database, query, table: currentTable } = req.body;
 
@@ -504,6 +691,16 @@ export async function registerRoutes(
 
       if (!query || typeof query !== "string") {
         return res.status(400).json({ error: "Query is required" });
+      }
+      
+      // Check table access for external customers (if a table is specified)
+      const userId = (req.user as any)?.claims?.sub;
+      const user = await authStorage.getUser(userId);
+      if (user?.role === "external_customer" && currentTable) {
+        const allowedTables = await getAllowedTables(userId);
+        if (!allowedTables.includes(`${database}:${currentTable}`)) {
+          return res.status(403).json({ error: "You don't have access to this table" });
+        }
       }
 
       // Get available tables if we need to discover them
@@ -519,6 +716,17 @@ export async function registerRoutes(
             AND table_schema NOT IN ('pg_catalog', 'information_schema')
         `);
         availableTables = tablesResult.rows.map((r) => r.full_name);
+        
+        // For external customers, filter to only granted tables
+        if (user?.role === "external_customer") {
+          const allowedTables = await getAllowedTables(userId);
+          availableTables = availableTables.filter(t => allowedTables.includes(`${database}:${t}`));
+          
+          // If no tables are allowed, return early
+          if (availableTables.length === 0) {
+            return res.status(403).json({ error: "No tables available. Contact an admin for access." });
+          }
+        }
 
         // If a table is selected, get its columns
         if (currentTable) {

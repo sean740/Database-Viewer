@@ -57,3 +57,26 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   lt: "less than",
   lte: "less than or equal",
 };
+
+export type UserRole = "admin" | "washos_user" | "external_customer";
+
+export interface User {
+  id: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  profileImageUrl: string | null;
+  role: UserRole;
+  isActive: boolean;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+}
+
+export interface TableGrant {
+  id: string;
+  userId: string;
+  database: string;
+  tableName: string;
+  grantedBy: string;
+  grantedAt: Date | null;
+}

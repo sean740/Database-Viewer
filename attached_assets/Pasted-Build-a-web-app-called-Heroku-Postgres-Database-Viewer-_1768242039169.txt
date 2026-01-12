@@ -1,0 +1,170 @@
+Build a web app called “Heroku Postgres Database Viewer” that runs on Replit and connects to one or more Postgres databases using connection strings stored in environment variables (Replit Secrets). The app must be non-destructive (read-only: SELECT queries only) and designed for a non-developer user.
+
+Tech stack requirements
+
+Use Node.js + Express for the backend API.
+
+Use PostgreSQL via the pg library.
+
+Use a simple frontend (vanilla HTML/CSS/JS is fine; no frameworks required).
+
+Store admin-configured filter definitions in a local JSON file (filters.json) in the Replit project (do not require a separate database for settings).
+
+Environment variables (Replit Secrets)
+
+DATABASE_URLS = JSON array of databases, each with name and url. Example:
+
+[
+  {"name":"Production","url":"postgres://..."},
+  {"name":"Staging","url":"postgres://..."}
+]
+
+
+Optional for NLQ (natural language):
+
+OPENAI_API_KEY for ChatGPT integration.
+
+Recommendation #1: “Database vs table” correction
+
+The UI requirement says “select which database to view,” but users actually need to browse tables inside a database.
+Implement two dropdowns:
+
+Database connection dropdown (from DATABASE_URLS)
+
+Table dropdown populated after selecting a database (list all tables in non-system schemas)
+
+Recommendation #3: Stable pagination
+
+Implement paging with 50 rows per page:
+
+Page is 1-based
+
+The user clicks a “Load” button to run the query
+
+Use stable ordering:
+
+If the table has a primary key, default ORDER BY <primary_key> ASC
+
+If no primary key, fall back to ORDER BY ctid ASC (Postgres internal row id) to keep the view consistent
+
+Avoid returning huge responses; enforce limit=50 server-side regardless of what the client requests.
+
+Core browsing requirements
+
+For the selected database + table:
+
+Display rows in a HTML table
+
+Include pagination controls:
+
+Current page display
+
+Next / Previous buttons
+
+Show total row count for the table after filters (use COUNT(*))
+
+Include a “Reload” button
+
+Filters (Recommendation #5: admin-managed filters per table)
+
+Admins can configure filters for each table based on available columns:
+
+The app should discover columns for the selected table via information_schema.columns.
+
+Provide an Admin Settings panel that allows:
+
+Add filter definitions
+
+Modify filter definitions
+
+Delete filter definitions
+
+Filter definition format:
+
+name (label shown in UI)
+
+column (must match a real column)
+
+operator (one of: eq, contains, gt, gte, lt, lte)
+
+Save filter definitions per table in filters.json, keyed by "schema.table".
+
+On the main viewer page, display filter inputs for whatever filter definitions exist for that table.
+
+When the user loads rows, apply chosen filter values using parameterized queries only (no string concatenation for values).
+
+Export requirements
+
+Add an Export CSV button that exports the user’s current view:
+
+Same table, same filters, same page (50 rows)
+
+Return a .csv download
+
+CSV must include a header row and escape commas/quotes/newlines properly
+
+Recommendation #4: ChatGPT “plain English” querying (safe, no arbitrary SQL)
+
+If OPENAI_API_KEY is present, include a “Ask in plain English” box.
+Implement safely:
+
+The user types a request like “show rows where status contains failed”
+
+The server calls OpenAI and asks for a structured query plan in JSON (NOT SQL), with this shape:
+
+{
+  "table": "schema.table",
+  "page": 1,
+  "filters": [
+    {"column":"status","op":"contains","value":"failed"}
+  ]
+}
+
+
+Enforce constraints:
+
+Only allow table values that are in the discovered table list for the selected DB
+
+Only allow columns that exist in the selected table
+
+Only allow the operators listed above
+
+Always enforce limit = 50
+
+The server should then execute the query using the same safe filtering system and return results for display.
+
+Do not allow the model to execute raw SQL or to request joins.
+
+If the user has selected a table already, constrain the model to that table (preferred).
+
+Rails awareness
+
+Assume the underlying schema was created by a Rails app (so tables might be pluralized, and there may be tables like schema_migrations and ar_internal_metadata). Exclude system schemas (pg_catalog, information_schema) but allow these Rails tables if they are in public.
+
+Deliverables
+
+Generate the complete Replit project:
+
+server.js (Express API + DB logic)
+
+public/index.html with all UI controls
+
+filters.json initialized empty
+
+package.json with dependencies and start script
+
+Clear comments and simple structure
+
+Include instructions in comments for setting DATABASE_URLS and (optional) OPENAI_API_KEY
+
+Non-functional constraints
+
+Must never run INSERT/UPDATE/DELETE
+
+Must validate all identifiers (schema/table/column) with a strict regex for SQL identifiers and reject anything invalid
+
+Must parameterize all values
+
+Must show user-friendly errors on connection issues / missing env vars / missing tables
+
+Now generate the project files and the full code for each file.

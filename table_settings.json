@@ -1,0 +1,286 @@
+{
+  "Default:public.vendors": {
+    "isVisible": true,
+    "displayName": "Vendors"
+  },
+  "Default:public.addresses": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.admins": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.application_parameters": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.ar_internal_metadata": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.area_delivery_fees": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.area_working_hours": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.areas": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.areas_pack_variants": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.attachments": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.balance_transaction_types": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.blazer_audits": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.blazer_checks": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.blazer_dashboard_queries": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.blazer_dashboards": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.blazer_queries": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_option_pack_variants": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_option_packs": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_option_variants": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_options": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_pack_surcharge_prices": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_price_limits": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_ratings": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_refunds": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_services": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_surge_prices": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.booking_tips": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.bookings": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.bookings_vendors": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.cancel_reasons": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.cancelled_bookings": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.car_types": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.cars": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.comments": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.commission_levels": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.compensation_parameters": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.credits_packs": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.customer_fees": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.data_migrations": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.declined_payments": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.discount_rules": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.dispatch_attempts": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.dispatch_requests": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.dispatch_results": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.dispatch_sessions": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.dispatch_zones": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.districts": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.eta_bookings": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.events": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.gift_card_coupons": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.gift_cards": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.groupon_redeems": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.image_attachments": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.marketing_surveys": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.messages": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.missed_wrap_ups": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.net_promoter_scores": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.new_gift_cards": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.one_off_coupon_usages": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.one_off_coupons": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.one_off_coupons_pack_variants": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.pack_commissions": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.pack_surcharge_rule_districts": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.pack_surcharge_rule_packs": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.pack_surcharge_rules": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.pack_variants": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.packs": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.plan_services": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.plans": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.prelaunch_users": {
+    "isVisible": false,
+    "displayName": null
+  },
+  "Default:public.price_plans": {
+    "isVisible": false,
+    "displayName": null
+  }
+}

@@ -2791,7 +2791,7 @@ Always be helpful and explain your suggestions in simple terms.`;
         temperature: 0.7,
       });
 
-      const assistantMessage = response.choices[0]?.message?.content || "I'm sorry, I couldn't process that request.";
+      let assistantMessage = response.choices[0]?.message?.content || "I'm sorry, I couldn't process that request.";
 
       messages.push({
         role: "assistant",
@@ -2849,8 +2849,9 @@ Always be helpful and explain your suggestions in simple terms.`;
                   explanation: action.explanation || "",
                 };
               } else {
-                // AI suggested an invalid action - log and return null action
+                // AI suggested an invalid action - log and append error to message
                 console.log(`[SECURITY] AI suggested invalid block config: ${validation.error}`);
+                assistantMessage += `\n\n**Note:** I wasn't able to create this block because: ${validation.error}. Please try rephrasing your request or ask me which columns are available in the table you want to use.`;
                 validatedAction = null;
               }
             }

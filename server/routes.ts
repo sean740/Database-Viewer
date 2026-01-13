@@ -2508,6 +2508,15 @@ For table blocks, config should have: database, table, columns (array of exact c
 For chart blocks, config should have: database, table, chartType, xColumn (the date/timestamp column to group by), yColumn (the column to aggregate), aggregateFunction, groupBy (can be a column name OR one of: "month", "year", "day", "week", "quarter" for date-based grouping), filters, rowLimit
 For metric blocks, config should have: database, table, column, aggregateFunction, filters, label, format
 
+FILTER OPERATORS: Use these exact operator values in filters:
+- "eq" for equals (NOT "=" or "==")
+- "contains" for text contains
+- "gt" for greater than
+- "gte" for greater than or equal
+- "lt" for less than
+- "lte" for less than or equal
+- "between" for date ranges (value must be array of two dates like ["2025-01-01", "2025-12-31"])
+
 CRITICAL: Only use column names that are listed above. For date-based grouping, use groupBy: "month" (or year/day/week/quarter) with xColumn set to the date column like "created_at".
 
 If you're just providing information or need clarification, respond with plain text.

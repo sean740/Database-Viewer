@@ -458,8 +458,8 @@
     "displayName": null
   },
   "Default:public.vendor_onboardings": {
-    "isVisible": false,
-    "displayName": null
+    "isVisible": true,
+    "displayName": "Onboarded Vendors"
   },
   "Default:public.vendor_pack_eligibilities": {
     "isVisible": false,

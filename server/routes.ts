@@ -358,7 +358,11 @@ async function validateBlockConfig(
   if (kind === "chart") {
     if (config.xColumn) columnsToValidate.push(config.xColumn);
     if (config.yColumn) columnsToValidate.push(config.yColumn);
-    if (config.groupBy) columnsToValidate.push(config.groupBy);
+    // Special date grouping values don't need column validation
+    const dateGroupByValues = ["month", "year", "day", "week", "quarter"];
+    if (config.groupBy && !dateGroupByValues.includes(config.groupBy.toLowerCase())) {
+      columnsToValidate.push(config.groupBy);
+    }
   }
   if (kind === "metric" && config.column) {
     columnsToValidate.push(config.column);
@@ -2196,12 +2200,49 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
         
         let selectPart: string;
         if (chartConfig.aggregateFunction && chartConfig.groupBy) {
-          validateIdentifier(chartConfig.groupBy, "column");
           const aggFunc = chartConfig.aggregateFunction.toUpperCase();
           if (!["COUNT", "SUM", "AVG", "MIN", "MAX"].includes(aggFunc)) {
             return res.status(400).json({ error: "Invalid aggregate function" });
           }
-          selectPart = `"${chartConfig.groupBy}" as label, ${aggFunc}("${chartConfig.yColumn}") as value`;
+          
+          // Handle special date-based grouping
+          const dateGroupByValues = ["month", "year", "day", "week", "quarter"];
+          const isDateGroupBy = dateGroupByValues.includes(chartConfig.groupBy.toLowerCase());
+          
+          let groupByExpr: string;
+          let labelExpr: string;
+          
+          if (isDateGroupBy) {
+            // Use xColumn as the date column for date-based grouping
+            const dateCol = `"${chartConfig.xColumn}"`;
+            const datePart = chartConfig.groupBy.toLowerCase();
+            
+            if (datePart === "month") {
+              labelExpr = `TO_CHAR(${dateCol}, 'YYYY-MM')`;
+              groupByExpr = labelExpr;
+            } else if (datePart === "year") {
+              labelExpr = `TO_CHAR(${dateCol}, 'YYYY')`;
+              groupByExpr = labelExpr;
+            } else if (datePart === "day") {
+              labelExpr = `TO_CHAR(${dateCol}, 'YYYY-MM-DD')`;
+              groupByExpr = labelExpr;
+            } else if (datePart === "week") {
+              labelExpr = `TO_CHAR(${dateCol}, 'IYYY-IW')`;
+              groupByExpr = labelExpr;
+            } else if (datePart === "quarter") {
+              labelExpr = `TO_CHAR(${dateCol}, 'YYYY-"Q"Q')`;
+              groupByExpr = labelExpr;
+            } else {
+              labelExpr = dateCol;
+              groupByExpr = dateCol;
+            }
+          } else {
+            validateIdentifier(chartConfig.groupBy, "column");
+            labelExpr = `"${chartConfig.groupBy}"`;
+            groupByExpr = `"${chartConfig.groupBy}"`;
+          }
+          
+          selectPart = `${labelExpr} as label, ${aggFunc}("${chartConfig.yColumn}") as value`;
           query = `SELECT ${selectPart} FROM ${tableRef}`;
           
           // Add filters
@@ -2213,7 +2254,7 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
             query += ` WHERE ${whereClauses.join(" AND ")}`;
           }
           
-          query += ` GROUP BY "${chartConfig.groupBy}" LIMIT ${rowLimit}`;
+          query += ` GROUP BY ${groupByExpr} ORDER BY ${groupByExpr} LIMIT ${rowLimit}`;
         } else {
           selectPart = `"${chartConfig.xColumn}" as label, "${chartConfig.yColumn}" as value`;
           query = `SELECT ${selectPart} FROM ${tableRef}`;
@@ -2431,10 +2472,10 @@ When the user wants to add a block, respond with a JSON action in this format:
 }
 
 For table blocks, config should have: database, table, columns (array of exact column names from above), filters (array), orderBy, rowLimit
-For chart blocks, config should have: database, table, chartType, xColumn, yColumn, aggregateFunction, groupBy (use actual column name, NOT "month"), filters, rowLimit
+For chart blocks, config should have: database, table, chartType, xColumn (the date/timestamp column to group by), yColumn (the column to aggregate), aggregateFunction, groupBy (can be a column name OR one of: "month", "year", "day", "week", "quarter" for date-based grouping), filters, rowLimit
 For metric blocks, config should have: database, table, column, aggregateFunction, filters, label, format
 
-CRITICAL: Only use column names that are listed above. Never guess column names like "onboard_date" if it's not in the list.
+CRITICAL: Only use column names that are listed above. For date-based grouping, use groupBy: "month" (or year/day/week/quarter) with xColumn set to the date column like "created_at".
 
 If you're just providing information or need clarification, respond with plain text.
 Always be helpful and explain your suggestions in simple terms.`;

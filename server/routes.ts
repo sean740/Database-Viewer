@@ -919,6 +919,67 @@ export async function registerRoutes(
     }
   });
 
+  // Get filter history for a user/table
+  app.get("/api/filters/history/:database/:table", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { database, table } = req.params;
+      
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const history = await storage.getFilterHistory(userId, database, table);
+      res.json(history);
+    } catch (err) {
+      console.error("Error getting filter history:", err);
+      res.status(500).json({ error: "Failed to get filter history" });
+    }
+  });
+
+  // Save filter to history
+  app.post("/api/filters/history", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { database, table, filters } = req.body;
+      
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      if (!database || !table || !Array.isArray(filters) || filters.length === 0) {
+        return res.status(400).json({ error: "Database, table, and non-empty filters are required" });
+      }
+
+      const entry = await storage.saveFilterHistory(userId, database, table, filters);
+      res.json(entry);
+    } catch (err) {
+      console.error("Error saving filter history:", err);
+      res.status(500).json({ error: "Failed to save filter history" });
+    }
+  });
+
+  // Delete a filter history entry
+  app.delete("/api/filters/history/:id", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const { id } = req.params;
+      
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const deleted = await storage.deleteFilterHistory(id, userId);
+      if (!deleted) {
+        return res.status(404).json({ error: "Filter history entry not found" });
+      }
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Error deleting filter history:", err);
+      res.status(500).json({ error: "Failed to delete filter history" });
+    }
+  });
+
   // Fetch rows with pagination and filters
   app.post("/api/rows", isAuthenticated, async (req: Request, res: Response) => {
     try {

@@ -691,9 +691,9 @@ export async function registerRoutes(
   app.patch("/api/admin/users/:userId", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
-      const { role, isActive } = req.body;
+      const { role, isActive, firstName, lastName, email } = req.body;
       
-      const updates: Partial<{ role: UserRole; isActive: boolean; updatedAt: Date }> = { updatedAt: new Date() };
+      const updates: Partial<{ role: UserRole; isActive: boolean; firstName: string; lastName: string; email: string; updatedAt: Date }> = { updatedAt: new Date() };
       
       if (role && ["admin", "washos_user", "external_customer"].includes(role)) {
         updates.role = role;
@@ -701,6 +701,28 @@ export async function registerRoutes(
       
       if (typeof isActive === "boolean") {
         updates.isActive = isActive;
+      }
+      
+      if (typeof firstName === "string") {
+        updates.firstName = firstName.trim();
+      }
+      
+      if (typeof lastName === "string") {
+        updates.lastName = lastName.trim();
+      }
+      
+      if (typeof email === "string") {
+        const normalizedEmail = email.toLowerCase().trim();
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(normalizedEmail)) {
+          return res.status(400).json({ error: "Invalid email format" });
+        }
+        // Check if email is already taken by another user
+        const existingUser = await db.select().from(users).where(eq(users.email, normalizedEmail)).limit(1);
+        if (existingUser.length > 0 && existingUser[0].id !== userId) {
+          return res.status(400).json({ error: "Email already in use" });
+        }
+        updates.email = normalizedEmail;
       }
       
       const [updated] = await db.update(users).set(updates).where(eq(users.id, userId)).returning();

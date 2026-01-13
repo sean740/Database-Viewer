@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ArrowLeft, Users, Table, Shield, Trash2, Plus, Loader2, UserPlus, Eye, EyeOff } from "lucide-react";
+import { ArrowLeft, Users, Table, Shield, Trash2, Plus, Loader2, UserPlus, Eye, EyeOff, Pencil } from "lucide-react";
 import type { User, TableGrant, UserRole, DatabaseConnection, TableInfo, TableSettings } from "@/lib/types";
 
 export default function AdminPage() {
@@ -33,6 +33,13 @@ export default function AdminPage() {
   const [visibilityDatabase, setVisibilityDatabase] = useState("");
   const [editingDisplayName, setEditingDisplayName] = useState<string | null>(null);
   const [displayNameValue, setDisplayNameValue] = useState("");
+  
+  // Edit user dialog state
+  const [isEditUserDialogOpen, setIsEditUserDialogOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editUserFirstName, setEditUserFirstName] = useState("");
+  const [editUserLastName, setEditUserLastName] = useState("");
+  const [editUserEmail, setEditUserEmail] = useState("");
 
   const { data: users = [], isLoading: isLoadingUsers } = useQuery<User[]>({
     queryKey: ["/api/admin/users"],
@@ -70,11 +77,13 @@ export default function AdminPage() {
   }, [databases, visibilityDatabase]);
 
   const updateUserMutation = useMutation({
-    mutationFn: async ({ userId, updates }: { userId: string; updates: { role?: UserRole; isActive?: boolean } }) => {
+    mutationFn: async ({ userId, updates }: { userId: string; updates: { role?: UserRole; isActive?: boolean; firstName?: string; lastName?: string; email?: string } }) => {
       return apiRequest("PATCH", `/api/admin/users/${userId}`, updates);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setIsEditUserDialogOpen(false);
+      setEditingUser(null);
       toast({ title: "User updated", description: "User settings have been saved." });
     },
     onError: (err) => {
@@ -285,6 +294,20 @@ export default function AdminPage() {
                               data-testid={`switch-active-${user.id}`}
                             />
                           </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              setEditingUser(user);
+                              setEditUserFirstName(user.firstName || "");
+                              setEditUserLastName(user.lastName || "");
+                              setEditUserEmail(user.email || "");
+                              setIsEditUserDialogOpen(true);
+                            }}
+                            data-testid={`button-edit-${user.id}`}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
                           <Button
                             variant="ghost"
                             size="icon"
@@ -691,6 +714,76 @@ export default function AdminPage() {
             >
               {createUserMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
               Create User
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isEditUserDialogOpen} onOpenChange={setIsEditUserDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit User</DialogTitle>
+            <DialogDescription>
+              Update user details
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-first-name">First Name</Label>
+                <Input
+                  id="edit-first-name"
+                  value={editUserFirstName}
+                  onChange={(e) => setEditUserFirstName(e.target.value)}
+                  placeholder="John"
+                  data-testid="input-edit-first-name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-last-name">Last Name</Label>
+                <Input
+                  id="edit-last-name"
+                  value={editUserLastName}
+                  onChange={(e) => setEditUserLastName(e.target.value)}
+                  placeholder="Doe"
+                  data-testid="input-edit-last-name"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-email">Email</Label>
+              <Input
+                id="edit-email"
+                type="email"
+                value={editUserEmail}
+                onChange={(e) => setEditUserEmail(e.target.value)}
+                placeholder="user@example.com"
+                data-testid="input-edit-email"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditUserDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (editingUser && editUserEmail) {
+                  updateUserMutation.mutate({
+                    userId: editingUser.id,
+                    updates: {
+                      firstName: editUserFirstName,
+                      lastName: editUserLastName,
+                      email: editUserEmail,
+                    },
+                  });
+                }
+              }}
+              disabled={!editUserEmail || updateUserMutation.isPending}
+              data-testid="button-save-user"
+            >
+              {updateUserMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Save Changes
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,4 +1,4 @@
-import { Database, Shield, LogOut, FileText } from "lucide-react";
+import { Database, Shield, LogOut } from "lucide-react";
 import { Link } from "wouter";
 import { ThemeToggle } from "./theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -93,12 +93,6 @@ export function Header({
               </p>
             </div>
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <Link href="/my-reports" className="flex items-center cursor-pointer" data-testid="link-my-reports">
-                <FileText className="mr-2 h-4 w-4" />
-                My Reports
-              </Link>
-            </DropdownMenuItem>
             {user?.role === "admin" && (
               <DropdownMenuItem asChild>
                 <Link href="/admin" className="flex items-center cursor-pointer" data-testid="link-admin">

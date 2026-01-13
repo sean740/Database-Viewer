@@ -260,11 +260,11 @@ export function NLQPanel({
   };
 
   return (
-    <Card className="border-primary/20 bg-gradient-to-r from-primary/5 to-transparent">
+    <Card className="border-accent/40 bg-gradient-to-r from-accent/10 to-card shadow-sm">
       <CardContent className="p-4 space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-primary" />
+            <Sparkles className="h-5 w-5 text-accent-foreground" />
             <span className="font-medium">AI Query Assistant</span>
             {selectedTable && (
               <Badge variant="outline" className="font-mono text-xs">

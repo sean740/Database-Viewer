@@ -963,5 +963,220 @@ ${context ? `Previous context from conversation:\n${context}\n` : ""}`;
     }
   });
 
+  // NLQ Smart Follow-up - called when a query returns no results
+  app.post("/api/nlq/smart-followup", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const { database, table: currentTable, filters, context } = req.body;
+
+      const client = getOpenAIClient();
+      if (!client) {
+        return res.status(400).json({ error: "Natural language queries are not enabled" });
+      }
+
+      if (!currentTable || !database || !filters || !Array.isArray(filters)) {
+        return res.status(400).json({ error: "Missing required parameters" });
+      }
+
+      // Check table access for external customers
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      if (user?.role === "external_customer") {
+        const allowedTables = await getAllowedTables(userId);
+        if (!allowedTables.includes(`${database}:${currentTable}`)) {
+          return res.status(403).json({ error: "You don't have access to this table" });
+        }
+      }
+
+      const pool = getPool(database);
+      const [schema, tableName] = currentTable.split(".");
+
+      // Get column information with data types
+      const columnsResult = await pool.query(
+        `SELECT column_name, data_type
+         FROM information_schema.columns
+         WHERE table_schema = $1 AND table_name = $2`,
+        [schema, tableName]
+      );
+      const columnTypes: Record<string, string> = {};
+      columnsResult.rows.forEach((r) => {
+        columnTypes[r.column_name] = r.data_type;
+      });
+
+      // Sample distinct values for each filtered column
+      interface ColumnSample {
+        column: string;
+        dataType: string;
+        filteredValue: string;
+        operator: string;
+        actualValues?: string[];
+        dateRange?: { min: string; max: string };
+      }
+      const columnSamples: ColumnSample[] = [];
+
+      const TIMEOUT_MS = 3000;
+      const MAX_DISTINCT_VALUES = 15;
+
+      for (const filter of filters) {
+        const colName = filter.column;
+        const dataType = columnTypes[colName];
+        
+        if (!dataType) continue;
+
+        const sample: ColumnSample = {
+          column: colName,
+          dataType: dataType,
+          filteredValue: filter.value,
+          operator: filter.op,
+        };
+
+        try {
+          // Helper function for timeout with proper cleanup
+          const queryWithTimeout = async (queryStr: string): Promise<any> => {
+            return new Promise((resolve, reject) => {
+              let timeoutId: NodeJS.Timeout | null = null;
+              let settled = false;
+              
+              timeoutId = setTimeout(() => {
+                if (!settled) {
+                  settled = true;
+                  reject(new Error("Timeout"));
+                }
+              }, TIMEOUT_MS);
+              
+              pool.query(queryStr)
+                .then((result) => {
+                  if (!settled) {
+                    settled = true;
+                    if (timeoutId) clearTimeout(timeoutId);
+                    resolve(result);
+                  }
+                })
+                .catch((err) => {
+                  if (!settled) {
+                    settled = true;
+                    if (timeoutId) clearTimeout(timeoutId);
+                    reject(err);
+                  }
+                });
+            });
+          };
+
+          // For string/text columns, get distinct values
+          if (dataType.includes("character") || dataType.includes("text") || dataType === "USER-DEFINED") {
+            const distinctQuery = `
+              SELECT DISTINCT "${colName}" as val
+              FROM "${schema}"."${tableName}"
+              WHERE "${colName}" IS NOT NULL
+              ORDER BY "${colName}"
+              LIMIT ${MAX_DISTINCT_VALUES}
+            `;
+            
+            const result = await queryWithTimeout(distinctQuery);
+            sample.actualValues = result.rows.map((r: any) => String(r.val));
+          }
+          // For date/timestamp columns, get min/max range
+          else if (dataType.includes("date") || dataType.includes("timestamp")) {
+            const rangeQuery = `
+              SELECT 
+                MIN("${colName}")::text as min_val,
+                MAX("${colName}")::text as max_val
+              FROM "${schema}"."${tableName}"
+              WHERE "${colName}" IS NOT NULL
+            `;
+            
+            const result = await queryWithTimeout(rangeQuery);
+            
+            if (result.rows[0]) {
+              sample.dateRange = {
+                min: result.rows[0].min_val,
+                max: result.rows[0].max_val,
+              };
+            }
+          }
+        } catch (err) {
+          // Skip this column if query times out or fails
+          console.log(`Skipping column ${colName} sampling:`, err);
+        }
+
+        columnSamples.push(sample);
+      }
+
+      // Build AI prompt with sampled values
+      let samplingInfo = "";
+      for (const sample of columnSamples) {
+        if (sample.actualValues && sample.actualValues.length > 0) {
+          samplingInfo += `\n- Column "${sample.column}" (${sample.dataType}): User searched for "${sample.filteredValue}" using operator "${sample.operator}"`;
+          samplingInfo += `\n  Actual values in database: ${sample.actualValues.map(v => `"${v}"`).join(", ")}`;
+        } else if (sample.dateRange) {
+          samplingInfo += `\n- Column "${sample.column}" (${sample.dataType}): User searched for "${sample.filteredValue}" using operator "${sample.operator}"`;
+          samplingInfo += `\n  Date range in database: from ${sample.dateRange.min} to ${sample.dateRange.max}`;
+        }
+      }
+
+      if (!samplingInfo) {
+        return res.json({
+          clarificationQuestion: "No results found for your query. Try adjusting your filter values or broadening your search.",
+          needsClarification: true,
+        });
+      }
+
+      const systemPrompt = `You are a helpful assistant that helps users find data in a database when their query returns no results.
+
+The user's query returned 0 results. Here's what we found about their filters:
+${samplingInfo}
+
+Your task:
+1. Identify which filter value(s) don't match the actual data
+2. For text columns: Look for synonyms or similar values (e.g., "completed" → "done", "cancelled" → "canceled")
+3. For date columns: Check if the date range is outside the available data
+4. Suggest specific alternatives that would return results
+
+Return ONLY a valid JSON object:
+{
+  "clarificationQuestion": "A helpful question suggesting alternatives. Be specific about which values to use.",
+  "needsClarification": true,
+  "suggestedFilters": [
+    {"column": "column_name", "op": "operator", "value": "suggested_value"}
+  ],
+  "summary": "Brief explanation of why the query returned no results"
+}
+
+Be conversational and helpful. If you find a likely synonym or alternative, suggest it directly.
+Example: "No bookings found with status 'completed'. I found that this table uses 'done' for completed bookings. Would you like to search for bookings with status 'done' instead?"
+
+${context ? `Previous conversation context:\n${context}` : ""}`;
+
+      const response = await client.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: "Help me understand why my query returned no results and suggest alternatives." },
+        ],
+        max_completion_tokens: 600,
+        temperature: 0.3,
+      });
+
+      const content = response.choices[0]?.message?.content || "{}";
+      
+      let result;
+      try {
+        const cleanContent = content.replace(/```json\n?|\n?```/g, "").trim();
+        result = JSON.parse(cleanContent);
+      } catch {
+        result = {
+          clarificationQuestion: content,
+          needsClarification: true,
+        };
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error("Error processing smart followup:", err);
+      res.status(500).json({
+        error: err instanceof Error ? err.message : "Failed to process followup",
+      });
+    }
+  });
+
   return httpServer;
 }

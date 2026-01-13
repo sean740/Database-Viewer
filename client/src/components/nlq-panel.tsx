@@ -87,20 +87,15 @@ export function NLQPanel({
 
     setIsLoading(true);
 
-    const filterDesc = lastPlan.filters
-      .map((f) => `${f.column} ${OPERATOR_LABELS[f.op]} "${f.value}"`)
-      .join(" AND ");
-
-    const followUpQuery = `The previous query returned no results. The filters applied were: ${filterDesc}. This might indicate the filter values don't match any data. Please suggest alternative filter values or ask a clarifying question to help the user find the data they're looking for.`;
-
     try {
-      const response = await fetch("/api/nlq", {
+      // Use the smart follow-up endpoint that samples actual column values
+      const response = await fetch("/api/nlq/smart-followup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           database: selectedDatabase,
-          query: followUpQuery,
           table: selectedTable,
+          filters: lastPlan.filters,
           context: context,
         }),
       });
@@ -110,13 +105,20 @@ export function NLQPanel({
         throw new Error(data.error || "Failed to process query");
       }
 
-      const plan: NLQPlan = await response.json();
+      const result = await response.json();
 
       const noResultsMessage: Message = {
         id: Date.now().toString(),
         role: "assistant",
-        content: plan.clarificationQuestion || plan.summary || "No results found. Try adjusting your search criteria or using different values.",
-        plan: plan.needsClarification ? plan : undefined,
+        content: result.clarificationQuestion || result.summary || "No results found. Try adjusting your search criteria or using different values.",
+        plan: result.suggestedFilters ? {
+          table: selectedTable,
+          page: 1,
+          filters: result.suggestedFilters,
+          needsClarification: true,
+          ambiguousColumns: result.suggestedFilters.map((f: any) => f.column),
+          summary: result.summary,
+        } : undefined,
       };
 
       setMessages((prev) => [...prev, noResultsMessage]);
@@ -237,6 +239,26 @@ export function NLQPanel({
     inputRef.current?.focus();
   };
 
+  const handleApplySuggestedFilters = (filters: NLQPlan["filters"]) => {
+    const plan: NLQPlan = {
+      table: selectedTable,
+      page: 1,
+      filters: filters,
+      summary: `Applied suggested filters: ${filters.map(f => `${f.column} ${OPERATOR_LABELS[f.op]} "${f.value}"`).join(" AND ")}`,
+    };
+
+    const assistantMessage: Message = {
+      id: Date.now().toString(),
+      role: "assistant",
+      content: plan.summary || "Applied suggested filters",
+      plan: { ...plan, needsClarification: false },
+    };
+    setMessages((prev) => [...prev, assistantMessage]);
+    setContext((prev) => prev + `\nApplied suggested filters: ${plan.summary}`);
+    
+    onQueryParsed(plan);
+  };
+
   return (
     <Card className="border-primary/20 bg-gradient-to-r from-primary/5 to-transparent">
       <CardContent className="p-4 space-y-3">
@@ -292,7 +314,7 @@ export function NLQPanel({
                         ))}
                       </div>
                     )}
-                    {msg.plan?.needsClarification && msg.plan.ambiguousColumns && msg.plan.ambiguousColumns.length > 0 && (
+                    {msg.plan?.needsClarification && msg.plan.ambiguousColumns && msg.plan.ambiguousColumns.length > 0 && !msg.plan.filters?.length && (
                       <div className="flex flex-wrap gap-1 mt-2">
                         {msg.plan.ambiguousColumns.map((col) => (
                           <Button
@@ -306,6 +328,25 @@ export function NLQPanel({
                             {col}
                           </Button>
                         ))}
+                      </div>
+                    )}
+                    {msg.plan?.needsClarification && msg.plan.filters && msg.plan.filters.length > 0 && (
+                      <div className="mt-2 space-y-2">
+                        <div className="text-xs text-muted-foreground">Click to apply this suggestion:</div>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="h-auto py-1 px-2 text-xs font-mono"
+                          onClick={() => handleApplySuggestedFilters(msg.plan!.filters)}
+                          data-testid="button-apply-suggestion"
+                        >
+                          {msg.plan.filters.map((f, idx) => (
+                            <span key={idx}>
+                              {idx > 0 && " AND "}
+                              {f.column} {OPERATOR_LABELS[f.op]} "{f.value}"
+                            </span>
+                          ))}
+                        </Button>
                       </div>
                     )}
                   </div>

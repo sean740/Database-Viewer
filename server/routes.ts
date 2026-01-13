@@ -2778,6 +2778,7 @@ FILTER OPERATORS: Use these exact operator values in filters:
 CRITICAL: Only use column names that are listed above. For date-based grouping, use groupBy: "month" (or year/day/week/quarter) with xColumn set to the date column like "created_at".
 
 If you're just providing information or need clarification, respond with plain text.
+IMPORTANT: If you cannot create a block because the request is unclear, you don't have enough information, or you're unsure which columns/tables to use, you MUST ask the user a clarifying question. Never leave the user without a response - either create a block OR ask a specific question to help you understand what they need.
 Always be helpful and explain your suggestions in simple terms.`;
 
       const response = await client.chat.completions.create({

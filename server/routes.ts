@@ -670,9 +670,90 @@ export async function registerRoutes(
   });
 
   // Export CSV
+  // Export row count check (for client-side validation before export)
+  app.post("/api/export/check", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const { database, table, filters } = req.body;
+
+      if (!database || !table) {
+        return res.status(400).json({ error: "Database and table are required" });
+      }
+
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      
+      // Check table access for external customers
+      if (user?.role === "external_customer") {
+        const allowedTables = await getAllowedTables(userId);
+        if (!allowedTables.includes(`${database}:${table}`)) {
+          return res.status(403).json({ error: "You don't have access to this table" });
+        }
+      }
+
+      const [schema, tableName] = (table as string).split(".");
+      validateIdentifier(schema, "schema");
+      validateIdentifier(tableName, "table");
+
+      const pool = getPool(database as string);
+
+      // Parse and validate filters
+      const activeFilters: ActiveFilter[] = filters || [];
+      
+      // Validate columns
+      const columnsResult = await pool.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`,
+        [schema, tableName]
+      );
+      const validColumns = new Set(columnsResult.rows.map((r) => r.column_name));
+
+      // Build WHERE clause
+      const whereClauses: string[] = [];
+      const params: unknown[] = [];
+      let paramIndex = 1;
+
+      for (const filter of activeFilters) {
+        validateIdentifier(filter.column, "column");
+        if (!validColumns.has(filter.column)) {
+          return res.status(400).json({ error: `Invalid column: ${filter.column}` });
+        }
+        const op = getOperatorSQL(filter.operator, paramIndex);
+        whereClauses.push(`"${filter.column}" ${op.sql}`);
+        params.push(op.transform ? op.transform(filter.value) : filter.value);
+        paramIndex++;
+      }
+
+      const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
+      // Count total rows
+      const countQuery = `SELECT COUNT(*) as count FROM "${schema}"."${tableName}" ${whereSQL}`;
+      const countResult = await pool.query(countQuery, params);
+      const totalCount = parseInt(countResult.rows[0].count, 10);
+
+      // Determine limits based on role
+      const isAdmin = user?.role === "admin";
+      const maxRowsForRole = isAdmin ? 50000 : 10000;
+      const warningThreshold = 2000;
+
+      res.json({
+        totalCount,
+        isAdmin,
+        maxRowsForRole,
+        warningThreshold,
+        canExport: totalCount <= maxRowsForRole,
+        needsWarning: totalCount > warningThreshold,
+        exceedsLimit: totalCount > maxRowsForRole,
+      });
+    } catch (err) {
+      console.error("Error checking export:", err);
+      res.status(500).json({
+        error: err instanceof Error ? err.message : "Failed to check export",
+      });
+    }
+  });
+
   app.get("/api/export", isAuthenticated, async (req: Request, res: Response) => {
     try {
-      const { database, table, page = "1", filters: filtersJson } = req.query;
+      const { database, table, page = "1", filters: filtersJson, exportAll } = req.query;
 
       if (!database || !table) {
         return res.status(400).json({ error: "Database and table are required" });
@@ -755,21 +836,61 @@ export async function registerRoutes(
       const whereSQL =
         whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
-      // Calculate offset
+      // Determine if exporting all rows
+      const isExportAll = exportAll === "true";
+      const isAdmin = user?.role === "admin";
+      const maxRowsForRole = isAdmin ? 50000 : 10000;
+
+      // If exporting all, verify row count doesn't exceed limits
+      let exportTotalCount = 0;
+      if (isExportAll) {
+        const countQuery = `SELECT COUNT(*) as count FROM "${schema}"."${tableName}" ${whereSQL}`;
+        const countResult = await pool.query(countQuery, params);
+        exportTotalCount = parseInt(countResult.rows[0].count, 10);
+
+        if (exportTotalCount > maxRowsForRole) {
+          return res.status(403).json({
+            error: isAdmin
+              ? `Export exceeds maximum limit of ${maxRowsForRole.toLocaleString()} rows`
+              : `Export exceeds your limit of ${maxRowsForRole.toLocaleString()} rows. Please contact an administrator for larger exports.`,
+          });
+        }
+      }
+
+      // Calculate pagination
       const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
       const offset = (pageNum - 1) * PAGE_SIZE;
 
-      // Fetch rows
-      const dataQuery = `
-        SELECT * FROM "${schema}"."${tableName}"
-        ${whereSQL}
-        ORDER BY ${orderByColumn} ASC
-        LIMIT ${PAGE_SIZE}
-        OFFSET ${offset}
-      `;
-      const dataResult = await pool.query(dataQuery, params);
+      // Build query based on export mode
+      let dataQuery: string;
+      let filename: string;
 
-      // Generate CSV
+      if (isExportAll) {
+        // Export all filtered rows - use validated count as LIMIT for consistency
+        dataQuery = `
+          SELECT * FROM "${schema}"."${tableName}"
+          ${whereSQL}
+          ORDER BY ${orderByColumn} ASC
+          LIMIT ${exportTotalCount}
+        `;
+        filename = `${tableName}_export.csv`;
+      } else {
+        // Export single page
+        dataQuery = `
+          SELECT * FROM "${schema}"."${tableName}"
+          ${whereSQL}
+          ORDER BY ${orderByColumn} ASC
+          LIMIT ${PAGE_SIZE}
+          OFFSET ${offset}
+        `;
+        filename = `${tableName}_page${pageNum}.csv`;
+      }
+
+      // Set headers for streaming CSV
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+      // Generate CSV with streaming for large exports
       const escapeCSV = (value: unknown): string => {
         if (value === null || value === undefined) return "";
         const str = typeof value === "object" ? JSON.stringify(value) : String(value);
@@ -779,23 +900,66 @@ export async function registerRoutes(
         return str;
       };
 
-      const header = columnNames.map(escapeCSV).join(",");
-      const rows = dataResult.rows.map((row) =>
-        columnNames.map((col) => escapeCSV(row[col])).join(",")
-      );
-      const csv = [header, ...rows].join("\n");
+      // Write header
+      res.write(columnNames.map(escapeCSV).join(",") + "\n");
 
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${tableName}_page${pageNum}.csv"`
-      );
-      res.send(csv);
+      // Use cursor for large exports to stream data
+      if (isExportAll) {
+        const client = await pool.connect();
+        const cursorName = `export_cursor_${Date.now()}`;
+        let transactionStarted = false;
+        
+        try {
+          // Create a cursor for streaming large result sets
+          await client.query("BEGIN");
+          transactionStarted = true;
+          await client.query(`DECLARE ${cursorName} CURSOR FOR ${dataQuery}`, params);
+
+          const batchSize = 1000;
+          let hasMore = true;
+
+          while (hasMore) {
+            const batchResult = await client.query(`FETCH ${batchSize} FROM ${cursorName}`);
+            if (batchResult.rows.length === 0) {
+              hasMore = false;
+            } else {
+              for (const row of batchResult.rows) {
+                res.write(columnNames.map((col) => escapeCSV(row[col])).join(",") + "\n");
+              }
+            }
+          }
+
+          await client.query(`CLOSE ${cursorName}`);
+          await client.query("COMMIT");
+        } catch (streamError) {
+          // Rollback transaction on any streaming error to prevent poisoned connections
+          if (transactionStarted) {
+            try {
+              await client.query("ROLLBACK");
+            } catch (rollbackError) {
+              console.error("Error rolling back export transaction:", rollbackError);
+            }
+          }
+          throw streamError;
+        } finally {
+          client.release();
+        }
+      } else {
+        // For single page, fetch all at once
+        const dataResult = await pool.query(dataQuery, params);
+        for (const row of dataResult.rows) {
+          res.write(columnNames.map((col) => escapeCSV(row[col])).join(",") + "\n");
+        }
+      }
+
+      res.end();
     } catch (err) {
       console.error("Error exporting CSV:", err);
-      res.status(500).json({
-        error: err instanceof Error ? err.message : "Failed to export CSV",
-      });
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: err instanceof Error ? err.message : "Failed to export CSV",
+        });
+      }
     }
   });
 

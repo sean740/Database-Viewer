@@ -398,7 +398,8 @@
   },
   "Default:public.user_no_shows": {
     "isVisible": true,
-    "displayName": "Customer No-Shows"
+    "displayName": "Customer No-Shows",
+    "hiddenColumns": []
   },
   "Default:public.user_packs": {
     "isVisible": false,

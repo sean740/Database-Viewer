@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -116,6 +116,19 @@ export default function MyReports() {
     queryKey: ["/api/reports/pages", selectedPageId],
     enabled: !!selectedPageId,
   });
+
+  const { data: chatData } = useQuery<{ messages: { role: string; content: string; timestamp?: string }[] }>({
+    queryKey: ["/api/reports/pages", selectedPageId, "chat"],
+    enabled: !!selectedPageId,
+  });
+
+  useEffect(() => {
+    if (chatData?.messages) {
+      setChatHistory(chatData.messages.map(m => ({ role: m.role, content: m.content })));
+    } else {
+      setChatHistory([]);
+    }
+  }, [chatData, selectedPageId]);
 
   const createPageMutation = useMutation({
     mutationFn: async (data: { title: string; description: string }) => {
@@ -298,7 +311,6 @@ export default function MyReports() {
                     key={page.id}
                     onClick={() => {
                       setSelectedPageId(page.id);
-                      setChatHistory([]);
                     }}
                     className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors hover-elevate ${
                       selectedPageId === page.id ? "bg-primary/10 text-primary" : "hover:bg-muted"

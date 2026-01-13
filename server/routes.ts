@@ -2334,6 +2334,39 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
     }
   });
 
+  // Get chat history for a report page
+  app.get("/api/reports/pages/:pageId/chat", isAuthenticated, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { pageId } = req.params;
+
+      // Verify page ownership
+      const [page] = await db
+        .select()
+        .from(reportPages)
+        .where(and(eq(reportPages.id, pageId), eq(reportPages.userId, userId)));
+
+      if (!page) {
+        return res.status(404).json({ error: "Report page not found" });
+      }
+
+      // Get chat session
+      const [session] = await db
+        .select()
+        .from(reportChatSessions)
+        .where(eq(reportChatSessions.pageId, pageId));
+
+      res.json({ messages: session?.messages || [] });
+    } catch (err) {
+      console.error("Error fetching chat history:", err);
+      res.status(500).json({ error: "Failed to fetch chat history" });
+    }
+  });
+
   // AI Chat endpoint for report building
   app.post("/api/reports/ai/chat", isAuthenticated, reportAILimiter, async (req, res) => {
     try {

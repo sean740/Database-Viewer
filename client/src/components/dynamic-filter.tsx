@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, X, Filter } from "lucide-react";
+import { Plus, X, Filter, Clock, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -15,13 +15,17 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import type { ColumnInfo, ActiveFilter } from "@/lib/types";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import type { ColumnInfo, ActiveFilter, FilterHistoryEntry } from "@/lib/types";
 import { OPERATOR_LABELS } from "@/lib/types";
 
 interface DynamicFilterProps {
   columns: ColumnInfo[];
   activeFilters: ActiveFilter[];
   onApplyFilters: (filters: ActiveFilter[]) => void;
+  database?: string;
+  table?: string;
 }
 
 const OPERATORS = [
@@ -37,11 +41,36 @@ export function DynamicFilter({
   columns,
   activeFilters,
   onApplyFilters,
+  database,
+  table,
 }: DynamicFilterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [selectedColumn, setSelectedColumn] = useState("");
   const [selectedOperator, setSelectedOperator] = useState("eq");
   const [filterValue, setFilterValue] = useState("");
+
+  const { data: filterHistory = [] } = useQuery<FilterHistoryEntry[]>({
+    queryKey: ["/api/filters/history", database, table],
+    enabled: !!database && !!table,
+  });
+
+  const saveHistoryMutation = useMutation({
+    mutationFn: async (filters: ActiveFilter[]) => {
+      await apiRequest("POST", "/api/filters/history", { database, table, filters });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/filters/history", database, table] });
+    },
+  });
+
+  const deleteHistoryMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/filters/history/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/filters/history", database, table] });
+    },
+  });
 
   const handleAddFilter = () => {
     if (!selectedColumn || !filterValue.trim()) return;
@@ -52,7 +81,13 @@ export function DynamicFilter({
       value: filterValue.trim(),
     };
 
-    onApplyFilters([...activeFilters, newFilter]);
+    const newFilters = [...activeFilters, newFilter];
+    onApplyFilters(newFilters);
+    
+    if (database && table && newFilters.length > 0) {
+      saveHistoryMutation.mutate(newFilters);
+    }
+    
     setSelectedColumn("");
     setSelectedOperator("eq");
     setFilterValue("");
@@ -68,8 +103,61 @@ export function DynamicFilter({
     onApplyFilters([]);
   };
 
+  const handleApplyFromHistory = (entry: FilterHistoryEntry) => {
+    onApplyFilters(entry.filters);
+    if (database && table) {
+      saveHistoryMutation.mutate(entry.filters);
+    }
+  };
+
+  const formatFilterSummary = (filters: ActiveFilter[]): string => {
+    return filters
+      .slice(0, 2)
+      .map((f) => `${f.column} ${OPERATOR_LABELS[f.operator]} "${typeof f.value === 'string' ? f.value : f.value.join('-')}"`)
+      .join(", ") + (filters.length > 2 ? ` +${filters.length - 2}` : "");
+  };
+
   return (
     <div className="flex items-center gap-2 flex-wrap">
+      {filterHistory.length > 0 && (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" data-testid="button-recent-filters">
+              <Clock className="h-4 w-4 mr-2" />
+              Recent
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-80" align="start">
+            <div className="space-y-2">
+              <div className="text-sm font-medium mb-2">Recent Filters</div>
+              {filterHistory.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex items-center justify-between gap-2 p-2 rounded-md hover:bg-muted"
+                >
+                  <button
+                    className="flex-1 text-left text-sm truncate"
+                    onClick={() => handleApplyFromHistory(entry)}
+                    data-testid={`button-apply-history-${entry.id}`}
+                  >
+                    {formatFilterSummary(entry.filters)}
+                  </button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0"
+                    onClick={() => deleteHistoryMutation.mutate(entry.id)}
+                    data-testid={`button-delete-history-${entry.id}`}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
+      )}
+
       <Popover open={isOpen} onOpenChange={setIsOpen}>
         <PopoverTrigger asChild>
           <Button variant="outline" size="sm" data-testid="button-add-filter">

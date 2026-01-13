@@ -95,3 +95,12 @@ export interface TableSettings {
   displayName: string | null;
   hiddenColumns?: string[];
 }
+
+export interface FilterHistoryEntry {
+  id: string;
+  userId: string;
+  database: string;
+  table: string;
+  filters: ActiveFilter[];
+  lastUsedAt: string;
+}

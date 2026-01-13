@@ -470,6 +470,8 @@ export default function DatabaseViewer() {
                   columns={visibleColumns}
                   activeFilters={activeFilters}
                   onApplyFilters={handleApplyFilters}
+                  database={selectedDatabase}
+                  table={selectedTable}
                 />
               )}
             </div>

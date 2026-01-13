@@ -162,6 +162,22 @@ function addFilterToQuery(
   }
 }
 
+// Version for already-aliased columns (column string is already properly quoted/aliased)
+function addFilterToQueryWithAlias(
+  f: { column: string; operator: string; value: any },
+  params: any[],
+  whereClauses: string[]
+) {
+  const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
+  whereClauses.push(`${f.column} ${opInfo.sql}`);
+  
+  if (f.operator === "between" && Array.isArray(f.value)) {
+    params.push(f.value[0], f.value[1]);
+  } else {
+    params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+  }
+}
+
 // OpenAI client for NLQ
 let openai: OpenAI | null = null;
 
@@ -346,11 +362,48 @@ async function validateBlockConfig(
     return tableValidation;
   }
 
+  // If there's a join, validate the joined table access too
+  let joinTableColumns: string[] = [];
+  if (config.join?.table) {
+    const joinTableValidation = await validateTableAccess(config.database, config.join.table, user);
+    if (!joinTableValidation.valid) {
+      return { valid: false, error: `Join table access error: ${joinTableValidation.error}` };
+    }
+    
+    // Validate join "on" columns
+    if (!config.join.on || config.join.on.length !== 2) {
+      return { valid: false, error: "Join 'on' must specify two columns [fromColumn, toColumn]" };
+    }
+    
+    // Get columns from joined table
+    const joinParsed = parseTableName(config.join.table);
+    if (joinParsed) {
+      const pool = getPool(config.database);
+      const joinColResult = await pool.query(`
+        SELECT column_name FROM information_schema.columns 
+        WHERE table_schema = $1 AND table_name = $2
+      `, [joinParsed.schema, joinParsed.table]);
+      joinTableColumns = joinColResult.rows.map((r: any) => r.column_name);
+    }
+  }
+
   // Collect all columns that need validation
   const columnsToValidate: string[] = [];
+  const joinColumnsToValidate: string[] = [];
 
   if (kind === "table" && config.columns?.length > 0) {
-    columnsToValidate.push(...config.columns);
+    // Separate main table columns from join table columns
+    for (const col of config.columns) {
+      if (col.includes(".")) {
+        // Column from joined table (e.g., "vendors.email")
+        const [tableAlias, colName] = col.split(".");
+        if (colName && joinTableColumns.length > 0) {
+          joinColumnsToValidate.push(colName);
+        }
+      } else {
+        columnsToValidate.push(col);
+      }
+    }
   }
   if (kind === "table" && config.orderBy?.column) {
     columnsToValidate.push(config.orderBy.column);
@@ -380,10 +433,19 @@ async function validateBlockConfig(
     }
   }
 
-  // Validate all columns exist
+  // Validate all main table columns exist
   const columnValidation = await validateColumns(config.database, config.table, columnsToValidate);
   if (!columnValidation.valid) {
     return columnValidation;
+  }
+
+  // Validate join table columns exist
+  if (joinColumnsToValidate.length > 0 && joinTableColumns.length > 0) {
+    for (const col of joinColumnsToValidate) {
+      if (!joinTableColumns.includes(col)) {
+        return { valid: false, error: `Column not found in joined table: ${col}` };
+      }
+    }
   }
 
   // Validate aggregate function if present
@@ -2229,17 +2291,50 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
 
       if (block.kind === "table") {
         const tableConfig = config as TableBlockConfig;
-        const columns = tableConfig.columns?.length > 0 
-          ? tableConfig.columns.map(c => { validateIdentifier(c, "column"); return `"${c}"`; }).join(", ")
-          : "*";
+        const mainAlias = "t1";
+        const joinAlias = "t2";
         
-        query = `SELECT ${columns} FROM ${tableRef}`;
+        // Build column list with proper table aliases for joins
+        let columns: string;
+        if (tableConfig.columns?.length > 0) {
+          columns = tableConfig.columns.map(c => {
+            if (c.includes(".")) {
+              // Column from joined table (e.g., "vendors.email")
+              const [, colName] = c.split(".");
+              validateIdentifier(colName, "column");
+              return `${joinAlias}."${colName}" AS "${c.replace(".", "_")}"`;
+            } else {
+              validateIdentifier(c, "column");
+              return `${mainAlias}."${c}"`;
+            }
+          }).join(", ");
+        } else {
+          columns = `${mainAlias}.*`;
+        }
         
-        // Add filters
+        query = `SELECT ${columns} FROM ${tableRef} AS ${mainAlias}`;
+        
+        // Add JOIN if specified
+        if (tableConfig.join?.table) {
+          const joinParsed = parseTableName(tableConfig.join.table);
+          if (!joinParsed) {
+            return res.status(400).json({ error: "Invalid join table name" });
+          }
+          const joinTableRef = `"${joinParsed.schema}"."${joinParsed.table}"`;
+          const joinType = tableConfig.join.type === "inner" ? "INNER JOIN" : "LEFT JOIN";
+          const [fromCol, toCol] = tableConfig.join.on;
+          validateIdentifier(fromCol, "column");
+          validateIdentifier(toCol, "column");
+          query += ` ${joinType} ${joinTableRef} AS ${joinAlias} ON ${mainAlias}."${fromCol}" = ${joinAlias}."${toCol}"`;
+        }
+        
+        // Add filters (use main table alias for non-prefixed columns)
         if (tableConfig.filters?.length > 0) {
           const whereClauses: string[] = [];
           tableConfig.filters.forEach((f) => {
-            addFilterToQuery(f, params, whereClauses);
+            // Add table alias to filter column if not already prefixed
+            const filterWithAlias = { ...f, column: `${mainAlias}."${f.column}"` };
+            addFilterToQueryWithAlias(filterWithAlias as any, params, whereClauses);
           });
           query += ` WHERE ${whereClauses.join(" AND ")}`;
         }
@@ -2247,7 +2342,7 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
         // Add order by
         if (tableConfig.orderBy) {
           validateIdentifier(tableConfig.orderBy.column, "column");
-          query += ` ORDER BY "${tableConfig.orderBy.column}" ${tableConfig.orderBy.direction === "desc" ? "DESC" : "ASC"}`;
+          query += ` ORDER BY ${mainAlias}."${tableConfig.orderBy.column}" ${tableConfig.orderBy.direction === "desc" ? "DESC" : "ASC"}`;
         }
         
         query += ` LIMIT ${rowLimit}`;
@@ -2260,7 +2355,7 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
           action: "REPORT_QUERY",
           database: config.database,
           table: config.table,
-          details: `Table block query: ${result.rows.length} rows`,
+          details: `Table block query: ${result.rows.length} rows${tableConfig.join ? ` (joined with ${tableConfig.join.table})` : ''}`,
           ip: req.ip || req.socket.remoteAddress,
         });
         

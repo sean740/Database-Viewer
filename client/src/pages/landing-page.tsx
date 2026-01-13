@@ -33,7 +33,7 @@ export default function LandingPage() {
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Database className="h-6 w-6 text-primary" />
-            <span className="font-semibold text-lg">Database Viewer</span>
+            <span className="font-semibold text-lg">WashOS Data Forge</span>
           </div>
         </div>
       </nav>
@@ -129,7 +129,7 @@ export default function LandingPage() {
 
         <footer className="container mx-auto px-4 py-8 border-t">
           <div className="text-center text-sm text-muted-foreground">
-            Database Viewer — Secure, read-only database browsing
+            WashOS Data Forge — Secure, read-only database browsing
           </div>
         </footer>
       </main>

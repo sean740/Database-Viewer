@@ -103,5 +103,17 @@ export type NLQPlan = z.infer<typeof nlqPlanSchema>;
 export const filtersConfigSchema = z.record(z.string(), z.array(filterDefinitionSchema));
 export type FiltersConfig = z.infer<typeof filtersConfigSchema>;
 
+// Filter history entry (user's recent filters per table)
+export const filterHistoryEntrySchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  database: z.string(),
+  table: z.string(),
+  filters: z.array(activeFilterSchema),
+  lastUsedAt: z.string(), // ISO timestamp
+});
+
+export type FilterHistoryEntry = z.infer<typeof filterHistoryEntrySchema>;
+
 // Export auth models
 export * from "./models/auth";

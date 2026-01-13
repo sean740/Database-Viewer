@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -58,6 +58,13 @@ export default function DatabaseViewer() {
   const [isExporting, setIsExporting] = useState(false);
   const [lastNLQPlan, setLastNLQPlan] = useState<NLQPlan | null>(null);
   const [localHiddenColumns, setLocalHiddenColumns] = useState<string[]>([]);
+  
+  // Per-table state storage to preserve filters/page/NLQ when switching tables
+  const [tableStateCache, setTableStateCache] = useState<Record<string, {
+    filters: ActiveFilter[];
+    page: number;
+    nlqPlan: NLQPlan | null;
+  }>>({})
   
   // Export dialog states
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -201,20 +208,59 @@ export default function DatabaseViewer() {
     },
   });
 
-  // Reset state when database changes
+  // Use refs to track current values for saving before table switch
+  const filtersRef = useRef(activeFilters);
+  const pageRef = useRef(currentPage);
+  const nlqPlanRef = useRef(lastNLQPlan);
+  const prevTableRef = useRef("");
+  
+  // Keep refs up to date
+  useEffect(() => { filtersRef.current = activeFilters; }, [activeFilters]);
+  useEffect(() => { pageRef.current = currentPage; }, [currentPage]);
+  useEffect(() => { nlqPlanRef.current = lastNLQPlan; }, [lastNLQPlan]);
+  
+  // Save current table state before switching and restore when returning
+  useEffect(() => {
+    const prevTable = prevTableRef.current;
+    
+    // Save state from previous table (if any) using refs for current values
+    if (prevTable && prevTable !== selectedTable) {
+      setTableStateCache(prev => ({
+        ...prev,
+        [prevTable]: {
+          filters: filtersRef.current,
+          page: pageRef.current,
+          nlqPlan: nlqPlanRef.current,
+        }
+      }));
+    }
+    
+    // Restore or reset state for new table
+    if (selectedTable) {
+      const cached = tableStateCache[selectedTable];
+      if (cached) {
+        setActiveFilters(cached.filters);
+        setCurrentPage(cached.page);
+        setLastNLQPlan(cached.nlqPlan);
+      } else {
+        setCurrentPage(1);
+        setActiveFilters([]);
+        setLastNLQPlan(null);
+      }
+    }
+    
+    prevTableRef.current = selectedTable;
+  }, [selectedTable]);
+
+  // Reset state when database changes (clear cache for that database)
   useEffect(() => {
     setSelectedTable("");
     setCurrentPage(1);
     setActiveFilters([]);
     setLastNLQPlan(null);
+    // Clear table cache when database changes
+    setTableStateCache({});
   }, [selectedDatabase]);
-
-  // Reset page and filters when table changes
-  useEffect(() => {
-    setCurrentPage(1);
-    setActiveFilters([]);
-    setLastNLQPlan(null);
-  }, [selectedTable]);
 
   // Auto-select first database if only one
   useEffect(() => {

@@ -12,5 +12,19 @@
       }
     ],
     "lastUsedAt": "2026-01-13T18:22:51.875Z"
+  },
+  {
+    "id": "yerv50v6lvviv3fw4t0ng",
+    "userId": "d221f7df-63df-4387-abb2-2843b9897203",
+    "database": "Default",
+    "table": "public.vendor_onboardings",
+    "filters": [
+      {
+        "column": "step",
+        "operator": "eq",
+        "value": "finished"
+      }
+    ],
+    "lastUsedAt": "2026-01-13T18:52:17.656Z"
   }
 ]

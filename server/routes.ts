@@ -2322,9 +2322,9 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
         return res.status(503).json({ error: "AI service not available" });
       }
 
-      // Get available tables for context
+      // Get available tables with columns for context
       const dbs = getDatabaseConnections();
-      let availableTables: { database: string; tables: TableInfo[] }[] = [];
+      let availableTablesWithColumns: { database: string; tables: Array<TableInfo & { columns: string[] }> }[] = [];
       
       for (const dbConn of dbs) {
         try {
@@ -2337,23 +2337,40 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
           `);
           
           const allSettings = await storage.getAllTableSettings();
-          let tables: TableInfo[] = tableResult.rows.map((t: any) => ({
-            schema: t.schema,
-            name: t.name,
-            fullName: `${t.schema}.${t.name}`,
-            displayName: allSettings[`${dbConn.name}:${t.schema}.${t.name}`]?.displayName || null,
-            isVisible: allSettings[`${dbConn.name}:${t.schema}.${t.name}`]?.isVisible ?? true,
-          }));
-
-          // Filter by visibility and grants for external customers
-          if (user.role === "external_customer") {
-            const allowedTables = await getAllowedTables(userId);
-            tables = tables.filter(t => allowedTables.includes(`${dbConn.name}:${t.fullName}`));
-          } else {
-            tables = tables.filter(t => t.isVisible);
+          let tables: Array<TableInfo & { columns: string[] }> = [];
+          
+          for (const t of tableResult.rows) {
+            const fullName = `${t.schema}.${t.name}`;
+            const settingsKey = `${dbConn.name}:${fullName}`;
+            const isVisible = allSettings[settingsKey]?.isVisible ?? true;
+            
+            // Skip hidden tables for non-admin users
+            if (user.role !== "admin" && !isVisible) continue;
+            
+            // For external customers, check grants
+            if (user.role === "external_customer") {
+              const allowedTables = await getAllowedTables(userId);
+              if (!allowedTables.includes(`${dbConn.name}:${fullName}`)) continue;
+            }
+            
+            // Fetch columns for this table
+            const columnResult = await pool.query(`
+              SELECT column_name FROM information_schema.columns
+              WHERE table_schema = $1 AND table_name = $2
+              ORDER BY ordinal_position
+            `, [t.schema, t.name]);
+            
+            tables.push({
+              schema: t.schema,
+              name: t.name,
+              fullName,
+              displayName: allSettings[settingsKey]?.displayName || null,
+              isVisible,
+              columns: columnResult.rows.map((c: any) => c.column_name),
+            });
           }
 
-          availableTables.push({ database: dbConn.name, tables });
+          availableTablesWithColumns.push({ database: dbConn.name, tables });
         } catch (err) {
           console.error(`Error fetching tables for ${dbConn.name}:`, err);
         }
@@ -2384,9 +2401,13 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
 
       const systemPrompt = `You are a helpful report building assistant. You help users create custom reports with tables, charts, and metrics.
 
-AVAILABLE TABLES:
-${availableTables.map(db => 
-  `Database: ${db.database}\n${db.tables.map(t => `  - ${t.displayName || t.name} (${t.fullName})`).join("\n")}`
+IMPORTANT: You MUST only use the exact column names listed below. Do NOT guess or invent column names.
+
+AVAILABLE TABLES AND COLUMNS:
+${availableTablesWithColumns.map(db => 
+  `Database: ${db.database}\n${db.tables.map(t => 
+    `  - ${t.displayName || t.name} (${t.fullName})\n    Columns: ${t.columns.slice(0, 20).join(", ")}${t.columns.length > 20 ? ` (and ${t.columns.length - 20} more)` : ""}`
+  ).join("\n")}`
 ).join("\n\n")}
 
 CURRENT REPORT: "${page.title}"
@@ -2409,9 +2430,11 @@ When the user wants to add a block, respond with a JSON action in this format:
   "explanation": "Why this block is useful"
 }
 
-For table blocks, config should have: database, table, columns (array), filters (array), orderBy, rowLimit
-For chart blocks, config should have: database, table, chartType, xColumn, yColumn, aggregateFunction, groupBy, filters, rowLimit
+For table blocks, config should have: database, table, columns (array of exact column names from above), filters (array), orderBy, rowLimit
+For chart blocks, config should have: database, table, chartType, xColumn, yColumn, aggregateFunction, groupBy (use actual column name, NOT "month"), filters, rowLimit
 For metric blocks, config should have: database, table, column, aggregateFunction, filters, label, format
+
+CRITICAL: Only use column names that are listed above. Never guess column names like "onboard_date" if it's not in the list.
 
 If you're just providing information or need clarification, respond with plain text.
 Always be helpful and explain your suggestions in simple terms.`;

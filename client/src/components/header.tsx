@@ -47,7 +47,11 @@ export function Header({
     <header className="h-16 border-b bg-card flex items-center justify-between px-6 gap-4">
       <div className="flex items-center gap-3">
         <Database className="h-6 w-6 text-primary" />
-        <h1 className="text-xl font-medium">WashOS DataScope</h1>
+        <h1 className="text-xl font-semibold tracking-tight">
+          <span className="text-foreground">WASH</span>
+          <span className="text-[#5B8DC9]">OS</span>
+          <span className="text-foreground font-medium ml-1.5">DataScope</span>
+        </h1>
       </div>
 
       <div className="flex items-center gap-4">

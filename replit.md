@@ -1,6 +1,6 @@
-# Heroku Postgres Database Viewer
+# WashOS DataScope
 
-A read-only web application for viewing and browsing PostgreSQL databases. Designed for non-developer users to safely explore database content without risk of data modification.
+A secure, read-only web application for viewing and browsing PostgreSQL databases with role-based access control. Designed for non-developer users to safely explore database content without risk of data modification.
 
 ## Overview
 
@@ -8,8 +8,9 @@ This application connects to one or more Postgres databases using connection str
 - Browsing tables within selected databases
 - Viewing rows with pagination (50 rows per page)
 - Applying filters to narrow down results
-- Exporting current view to CSV
+- Exporting data to CSV with role-based limits
 - Natural language queries using ChatGPT (when OpenAI integration is enabled)
+- Role-based access control (Admin, WashOS User, External Customer)
 
 ## Tech Stack
 
@@ -41,9 +42,32 @@ filters.json       # Admin-configured filter definitions (per table)
   - JSON array format: `[{"name":"Production","url":"postgres://..."},{"name":"Staging","url":"postgres://..."}]`
   - Single connection: `postgres://user:pass@host:5432/dbname` (will be named "Default")
 
-### Optional (Auto-configured by Replit AI Integrations)
-- `AI_INTEGRATIONS_OPENAI_API_KEY`: For natural language queries
-- `AI_INTEGRATIONS_OPENAI_BASE_URL`: OpenAI API base URL
+### Optional
+- `AI_INTEGRATIONS_OPENAI_API_KEY`: For natural language queries (auto-configured by Replit AI Integrations)
+- `AI_INTEGRATIONS_OPENAI_BASE_URL`: OpenAI API base URL (auto-configured)
+- `DB_SSL_REJECT_UNAUTHORIZED`: Set to "false" to disable SSL certificate verification for self-signed certs (default: true for security)
+
+## Security Features
+
+### SSL Certificate Verification
+- Database connections verify SSL certificates by default for production security
+- Set `DB_SSL_REJECT_UNAUTHORIZED=false` only for development with self-signed certificates
+
+### Rate Limiting
+- General API: 100 requests per minute
+- Authentication endpoints: 10 requests per minute
+- Export endpoints: 10 requests per minute
+- AI/NLQ queries: 20 requests per minute
+
+### Audit Logging
+- All data access (viewing rows, exports) is logged to the database
+- Logs include: user ID, email, action, database/table, timestamp, IP address
+- Admins can view audit logs via the `/api/admin/audit-logs` endpoint
+
+### Role-Based Access Control
+- **Admin**: Full access, user management, table visibility settings, view audit logs
+- **WashOS User**: Full data access, can manage External Customer grants
+- **External Customer**: Access only to specifically granted tables
 
 ## API Endpoints
 

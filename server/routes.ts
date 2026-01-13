@@ -2,11 +2,12 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { Pool } from "pg";
 import OpenAI from "openai";
-import { eq } from "drizzle-orm";
+import rateLimit from "express-rate-limit";
+import { eq, and, desc, count } from "drizzle-orm";
 import { storage } from "./storage";
 import { db } from "./db";
 import { setupAuth, registerAuthRoutes, isAuthenticated, authStorage } from "./replit_integrations/auth";
-import { users, tableGrants, type UserRole, type User } from "@shared/schema";
+import { users, tableGrants, auditLogs, type UserRole, type User } from "@shared/schema";
 import type {
   DatabaseConnection,
   TableInfo,
@@ -80,13 +81,16 @@ function getPool(dbName: string): Pool {
     throw new Error(`Database not found: ${dbName}`);
   }
 
+  // SSL configuration - verify certificates in production for security
+  const sslConfig = process.env.DB_SSL_REJECT_UNAUTHORIZED === "false" 
+    ? { rejectUnauthorized: false }
+    : { rejectUnauthorized: true };
+
   const pool = new Pool({
     connectionString: db.url,
     max: 5,
     idleTimeoutMillis: 30000,
-    ssl: {
-      rejectUnauthorized: false,
-    },
+    ssl: sslConfig,
   });
 
   pools.set(dbName, pool);
@@ -168,6 +172,36 @@ async function getAllowedTables(userId: string): Promise<string[]> {
   return grants.map(g => `${g.database}:${g.tableName}`);
 }
 
+// Audit logging for data access - persisted to database
+async function logAudit(entry: {
+  userId: string;
+  userEmail: string;
+  action: string;
+  database?: string;
+  table?: string;
+  details?: string;
+  ip?: string;
+}) {
+  try {
+    // Insert into database
+    await db.insert(auditLogs).values({
+      userId: entry.userId,
+      userEmail: entry.userEmail,
+      action: entry.action,
+      database: entry.database || null,
+      tableName: entry.table || null,
+      details: entry.details || null,
+      ipAddress: entry.ip || null,
+    });
+    
+    // Also log to console for real-time monitoring
+    console.log(`[AUDIT] ${new Date().toISOString()} | User: ${entry.userEmail} | Action: ${entry.action} | DB: ${entry.database || '-'} | Table: ${entry.table || '-'} | ${entry.details || ''}`);
+  } catch (err) {
+    // Don't let audit logging failures break the request
+    console.error("Failed to write audit log:", err);
+  }
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -175,6 +209,53 @@ export async function registerRoutes(
   // Setup auth BEFORE other routes
   await setupAuth(app);
   registerAuthRoutes(app);
+  
+  // ========== RATE LIMITING ==========
+  
+  // General API rate limit: 100 requests per minute
+  const generalLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 100,
+    message: { error: "Too many requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  
+  // Stricter rate limit for auth endpoints: 10 attempts per minute
+  const authLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 10,
+    message: { error: "Too many login attempts, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  
+  // Rate limit for exports: 10 per minute
+  const exportLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 10,
+    message: { error: "Too many export requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  
+  // Rate limit for NLQ: 20 per minute
+  const nlqLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 20,
+    message: { error: "Too many AI query requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  
+  // Apply general rate limit to all API routes
+  app.use("/api/", generalLimiter);
+  
+  // Apply stricter limits to specific endpoints
+  app.use("/api/auth/login", authLimiter);
+  app.use("/api/auth/register", authLimiter);
+  app.use("/api/export", exportLimiter);
+  app.use("/api/nlq", nlqLimiter);
   
   // ========== ADMIN ROUTES ==========
   
@@ -331,6 +412,51 @@ export async function registerRoutes(
     } catch (err) {
       console.error("Error deleting grant:", err);
       res.status(500).json({ error: "Failed to delete grant" });
+    }
+  });
+
+  // Get audit logs (admin only)
+  app.get("/api/admin/audit-logs", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
+    try {
+      const { limit = "100", offset = "0", userId, action } = req.query;
+      const limitNum = Math.min(parseInt(limit as string) || 100, 1000);
+      const offsetNum = parseInt(offset as string) || 0;
+      
+      // Build where conditions for SQL filtering
+      const conditions = [];
+      if (userId) {
+        conditions.push(eq(auditLogs.userId, userId as string));
+      }
+      if (action) {
+        conditions.push(eq(auditLogs.action, action as string));
+      }
+      
+      // Get total count with filters
+      let countQuery = db.select({ count: count() }).from(auditLogs);
+      if (conditions.length > 0) {
+        countQuery = countQuery.where(and(...conditions)) as typeof countQuery;
+      }
+      const [{ count: total }] = await countQuery;
+      
+      // Get paginated logs with filters - most recent first
+      let logsQuery = db.select().from(auditLogs);
+      if (conditions.length > 0) {
+        logsQuery = logsQuery.where(and(...conditions)) as typeof logsQuery;
+      }
+      const logs = await logsQuery
+        .orderBy(desc(auditLogs.timestamp))
+        .limit(limitNum)
+        .offset(offsetNum);
+      
+      res.json({
+        logs,
+        total: Number(total),
+        limit: limitNum,
+        offset: offsetNum,
+      });
+    } catch (err) {
+      console.error("Error fetching audit logs:", err);
+      res.status(500).json({ error: "Failed to fetch audit logs" });
     }
   });
 
@@ -654,6 +780,17 @@ export async function registerRoutes(
       `;
       const dataResult = await pool.query(dataQuery, params);
 
+      // Audit log data access
+      logAudit({
+        userId: userId,
+        userEmail: user?.email || "unknown",
+        action: "VIEW_DATA",
+        database: database,
+        table: table,
+        details: `Viewed page ${safePage} of ${totalPages} (${dataResult.rows.length} rows)${filters.length > 0 ? `, ${filters.length} filters applied` : ''}`,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
       res.json({
         rows: dataResult.rows,
         totalCount,
@@ -951,6 +1088,19 @@ export async function registerRoutes(
           res.write(columnNames.map((col) => escapeCSV(row[col])).join(",") + "\n");
         }
       }
+
+      // Audit log the export
+      logAudit({
+        userId: userId,
+        userEmail: user?.email || "unknown",
+        action: isExportAll ? "EXPORT_ALL" : "EXPORT_PAGE",
+        database: database as string,
+        table: table as string,
+        details: isExportAll 
+          ? `Exported ${exportTotalCount} rows${filters.length > 0 ? `, ${filters.length} filters applied` : ''}`
+          : `Exported page ${pageNum}${filters.length > 0 ? `, ${filters.length} filters applied` : ''}`,
+        ip: req.ip || req.socket.remoteAddress,
+      });
 
       res.end();
     } catch (err) {

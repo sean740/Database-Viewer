@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, jsonb, pgTable, timestamp, varchar } from "drizzle-orm/pg-core";
+import { boolean, index, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
 // User role enum type
 export type UserRole = "admin" | "washos_user" | "external_customer";
@@ -46,3 +46,22 @@ export const tableGrants = pgTable("table_grants", {
 
 export type TableGrant = typeof tableGrants.$inferSelect;
 export type InsertTableGrant = typeof tableGrants.$inferInsert;
+
+// Audit logs table for tracking data access
+export const auditLogs = pgTable("audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  userEmail: varchar("user_email").notNull(),
+  action: varchar("action").notNull(),
+  database: varchar("database"),
+  tableName: varchar("table_name"),
+  details: text("details"),
+  ipAddress: varchar("ip_address"),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+}, (table) => [
+  index("idx_audit_logs_user").on(table.userId),
+  index("idx_audit_logs_timestamp").on(table.timestamp),
+]);
+
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type InsertAuditLog = typeof auditLogs.$inferInsert;

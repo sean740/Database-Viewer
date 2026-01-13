@@ -40,6 +40,8 @@ export default function AdminPage() {
   const [editUserFirstName, setEditUserFirstName] = useState("");
   const [editUserLastName, setEditUserLastName] = useState("");
   const [editUserEmail, setEditUserEmail] = useState("");
+  const [editUserPassword, setEditUserPassword] = useState("");
+  const [editUserRole, setEditUserRole] = useState<UserRole>("external_customer");
 
   const { data: users = [], isLoading: isLoadingUsers } = useQuery<User[]>({
     queryKey: ["/api/admin/users"],
@@ -77,7 +79,7 @@ export default function AdminPage() {
   }, [databases, visibilityDatabase]);
 
   const updateUserMutation = useMutation({
-    mutationFn: async ({ userId, updates }: { userId: string; updates: { role?: UserRole; isActive?: boolean; firstName?: string; lastName?: string; email?: string } }) => {
+    mutationFn: async ({ userId, updates }: { userId: string; updates: { role?: UserRole; isActive?: boolean; firstName?: string; lastName?: string; email?: string; password?: string } }) => {
       return apiRequest("PATCH", `/api/admin/users/${userId}`, updates);
     },
     onSuccess: () => {
@@ -302,6 +304,8 @@ export default function AdminPage() {
                               setEditUserFirstName(user.firstName || "");
                               setEditUserLastName(user.lastName || "");
                               setEditUserEmail(user.email || "");
+                              setEditUserPassword("");
+                              setEditUserRole(user.role);
                               setIsEditUserDialogOpen(true);
                             }}
                             data-testid={`button-edit-${user.id}`}
@@ -761,6 +765,30 @@ export default function AdminPage() {
                 data-testid="input-edit-email"
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-password">New Password</Label>
+              <Input
+                id="edit-password"
+                type="password"
+                value={editUserPassword}
+                onChange={(e) => setEditUserPassword(e.target.value)}
+                placeholder="Leave blank to keep current password"
+                data-testid="input-edit-password"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-role">Role</Label>
+              <Select value={editUserRole} onValueChange={(value) => setEditUserRole(value as UserRole)}>
+                <SelectTrigger data-testid="select-edit-role">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="washos_user">WashOS User</SelectItem>
+                  <SelectItem value="external_customer">External Customer</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsEditUserDialogOpen(false)}>
@@ -769,13 +797,18 @@ export default function AdminPage() {
             <Button
               onClick={() => {
                 if (editingUser && editUserEmail) {
+                  const updates: { firstName: string; lastName: string; email: string; role: UserRole; password?: string } = {
+                    firstName: editUserFirstName,
+                    lastName: editUserLastName,
+                    email: editUserEmail,
+                    role: editUserRole,
+                  };
+                  if (editUserPassword) {
+                    updates.password = editUserPassword;
+                  }
                   updateUserMutation.mutate({
                     userId: editingUser.id,
-                    updates: {
-                      firstName: editUserFirstName,
-                      lastName: editUserLastName,
-                      email: editUserEmail,
-                    },
+                    updates,
                   });
                 }
               }}

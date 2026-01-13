@@ -691,9 +691,9 @@ export async function registerRoutes(
   app.patch("/api/admin/users/:userId", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
-      const { role, isActive, firstName, lastName, email } = req.body;
+      const { role, isActive, firstName, lastName, email, password } = req.body;
       
-      const updates: Partial<{ role: UserRole; isActive: boolean; firstName: string; lastName: string; email: string; updatedAt: Date }> = { updatedAt: new Date() };
+      const updates: Partial<{ role: UserRole; isActive: boolean; firstName: string; lastName: string; email: string; password: string; updatedAt: Date }> = { updatedAt: new Date() };
       
       if (role && ["admin", "washos_user", "external_customer"].includes(role)) {
         updates.role = role;
@@ -723,6 +723,15 @@ export async function registerRoutes(
           return res.status(400).json({ error: "Email already in use" });
         }
         updates.email = normalizedEmail;
+      }
+      
+      // Handle password update
+      if (typeof password === "string" && password.length > 0) {
+        if (password.length < 4) {
+          return res.status(400).json({ error: "Password must be at least 4 characters" });
+        }
+        const bcrypt = await import("bcryptjs");
+        updates.password = await bcrypt.hash(password, 10);
       }
       
       const [updated] = await db.update(users).set(updates).where(eq(users.id, userId)).returning();

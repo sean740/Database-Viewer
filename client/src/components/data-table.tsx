@@ -50,7 +50,7 @@ export function DataTable({ columns, rows, isLoading }: DataTableProps) {
   }
 
   return (
-    <div className="border rounded-lg bg-card flex flex-col min-h-0 flex-1">
+    <div className="border rounded-lg bg-card flex flex-col h-full overflow-hidden">
       <div className="overflow-auto flex-1 scrollbar-always-visible">
         <Table className="min-w-max">
           <TableHeader className="sticky top-0 bg-card z-10">

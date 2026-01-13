@@ -429,7 +429,7 @@ export default function DatabaseViewer() {
           isLoading={isLoadingTables}
         />
 
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {selectedTable && (
             <ControlBar
               selectedTable={selectedTable}
@@ -449,28 +449,32 @@ export default function DatabaseViewer() {
             />
           )}
 
-          <div className="flex-1 flex flex-col overflow-hidden p-6 gap-4">
-            {nlqEnabled && selectedDatabase && (
-              <NLQPanel
-                isEnabled={nlqEnabled}
-                selectedDatabase={selectedDatabase}
-                selectedTable={selectedTable}
-                onQueryParsed={handleNLQParsed}
-                lastPlan={lastNLQPlan}
-                resultCount={queryResult?.totalCount}
-                isLoadingResults={isLoadingRows}
-              />
-            )}
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden p-6 gap-4">
+            <div className="shrink-0">
+              {nlqEnabled && selectedDatabase && (
+                <NLQPanel
+                  isEnabled={nlqEnabled}
+                  selectedDatabase={selectedDatabase}
+                  selectedTable={selectedTable}
+                  onQueryParsed={handleNLQParsed}
+                  lastPlan={lastNLQPlan}
+                  resultCount={queryResult?.totalCount}
+                  isLoadingResults={isLoadingRows}
+                />
+              )}
+            </div>
 
-            {selectedTable && visibleColumns.length > 0 && (
-              <DynamicFilter
-                columns={visibleColumns}
-                activeFilters={activeFilters}
-                onApplyFilters={handleApplyFilters}
-              />
-            )}
+            <div className="shrink-0">
+              {selectedTable && visibleColumns.length > 0 && (
+                <DynamicFilter
+                  columns={visibleColumns}
+                  activeFilters={activeFilters}
+                  onApplyFilters={handleApplyFilters}
+                />
+              )}
+            </div>
 
-            <div className="flex-1 min-h-0 flex flex-col">
+            <div className="flex-1 min-h-0 overflow-hidden">
               <DataTable
                 columns={visibleColumns}
                 rows={queryResult?.rows || []}
@@ -480,14 +484,16 @@ export default function DatabaseViewer() {
           </div>
 
           {selectedTable && queryResult && queryResult.totalCount > 0 && (
-            <PaginationControls
-              currentPage={currentPage}
-              totalPages={queryResult.totalPages}
-              totalCount={queryResult.totalCount}
-              pageSize={queryResult.pageSize}
-              onPageChange={handlePageChange}
-              isLoading={isLoadingRows}
-            />
+            <div className="shrink-0">
+              <PaginationControls
+                currentPage={currentPage}
+                totalPages={queryResult.totalPages}
+                totalCount={queryResult.totalCount}
+                pageSize={queryResult.pageSize}
+                onPageChange={handlePageChange}
+                isLoading={isLoadingRows}
+              />
+            </div>
           )}
         </main>
       </div>

@@ -364,6 +364,19 @@ async function validateBlockConfig(
 
   // If there's a join, validate the joined table access too
   let joinTableColumns: string[] = [];
+  let mainTableColumns: string[] = [];
+  
+  // Get main table columns for validation
+  const mainParsed = parseTableName(config.table);
+  if (mainParsed) {
+    const pool = getPool(config.database);
+    const mainColResult = await pool.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_schema = $1 AND table_name = $2
+    `, [mainParsed.schema, mainParsed.table]);
+    mainTableColumns = mainColResult.rows.map((r: any) => r.column_name);
+  }
+  
   if (config.join?.table) {
     const joinTableValidation = await validateTableAccess(config.database, config.join.table, user);
     if (!joinTableValidation.valid) {
@@ -375,6 +388,12 @@ async function validateBlockConfig(
       return { valid: false, error: "Join 'on' must specify two columns [fromColumn, toColumn]" };
     }
     
+    // Validate the fromColumn exists in main table
+    const [fromCol, toCol] = config.join.on;
+    if (!mainTableColumns.includes(fromCol)) {
+      return { valid: false, error: `Join column '${fromCol}' not found in main table` };
+    }
+    
     // Get columns from joined table
     const joinParsed = parseTableName(config.join.table);
     if (joinParsed) {
@@ -384,8 +403,29 @@ async function validateBlockConfig(
         WHERE table_schema = $1 AND table_name = $2
       `, [joinParsed.schema, joinParsed.table]);
       joinTableColumns = joinColResult.rows.map((r: any) => r.column_name);
+      
+      // Validate the toColumn exists in joined table
+      if (!joinTableColumns.includes(toCol)) {
+        return { valid: false, error: `Join column '${toCol}' not found in joined table` };
+      }
     }
   }
+
+  // Helper to validate dotted column reference format
+  const validateDottedColumn = (col: string): { valid: boolean; colName?: string; error?: string } => {
+    const parts = col.split(".");
+    if (parts.length !== 2) {
+      return { valid: false, error: `Invalid column reference '${col}': must be 'alias.column' format with exactly one dot` };
+    }
+    const [, colName] = parts;
+    if (!colName || !isValidIdentifier(colName)) {
+      return { valid: false, error: `Invalid column name in '${col}'` };
+    }
+    if (!config.join) {
+      return { valid: false, error: `Cannot use join column reference '${col}' without a join configuration` };
+    }
+    return { valid: true, colName };
+  };
 
   // Collect all columns that need validation
   const columnsToValidate: string[] = [];
@@ -395,18 +435,27 @@ async function validateBlockConfig(
     // Separate main table columns from join table columns
     for (const col of config.columns) {
       if (col.includes(".")) {
-        // Column from joined table (e.g., "vendors.email")
-        const [tableAlias, colName] = col.split(".");
-        if (colName && joinTableColumns.length > 0) {
-          joinColumnsToValidate.push(colName);
+        // Column from joined table (e.g., "joined.email")
+        const result = validateDottedColumn(col);
+        if (!result.valid) {
+          return { valid: false, error: result.error };
         }
+        joinColumnsToValidate.push(result.colName!);
       } else {
         columnsToValidate.push(col);
       }
     }
   }
   if (kind === "table" && config.orderBy?.column) {
-    columnsToValidate.push(config.orderBy.column);
+    if (config.orderBy.column.includes(".")) {
+      const result = validateDottedColumn(config.orderBy.column);
+      if (!result.valid) {
+        return { valid: false, error: result.error };
+      }
+      joinColumnsToValidate.push(result.colName!);
+    } else {
+      columnsToValidate.push(config.orderBy.column);
+    }
   }
   if (kind === "chart") {
     if (config.xColumn) columnsToValidate.push(config.xColumn);
@@ -421,10 +470,21 @@ async function validateBlockConfig(
     columnsToValidate.push(config.column);
   }
 
-  // Validate filter columns
+  // Validate filter columns (handle join columns with dots)
   if (config.filters?.length > 0) {
     for (const f of config.filters) {
-      if (f.column) columnsToValidate.push(f.column);
+      if (f.column) {
+        if (f.column.includes(".")) {
+          // Filter column from joined table
+          const result = validateDottedColumn(f.column);
+          if (!result.valid) {
+            return { valid: false, error: result.error };
+          }
+          joinColumnsToValidate.push(result.colName!);
+        } else {
+          columnsToValidate.push(f.column);
+        }
+      }
       // Validate operator
       const validOps = ["eq", "contains", "gt", "gte", "lt", "lte", "between"];
       if (!validOps.includes(f.operator)) {
@@ -2328,21 +2388,38 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
           query += ` ${joinType} ${joinTableRef} AS ${joinAlias} ON ${mainAlias}."${fromCol}" = ${joinAlias}."${toCol}"`;
         }
         
-        // Add filters (use main table alias for non-prefixed columns)
+        // Add filters (handle join columns with dots)
         if (tableConfig.filters?.length > 0) {
           const whereClauses: string[] = [];
           tableConfig.filters.forEach((f) => {
-            // Add table alias to filter column if not already prefixed
-            const filterWithAlias = { ...f, column: `${mainAlias}."${f.column}"` };
+            let columnRef: string;
+            if (f.column.includes(".")) {
+              // Column from joined table (e.g., "joined.status")
+              const [, colName] = f.column.split(".");
+              validateIdentifier(colName, "column");
+              columnRef = `${joinAlias}."${colName}"`;
+            } else {
+              validateIdentifier(f.column, "column");
+              columnRef = `${mainAlias}."${f.column}"`;
+            }
+            const filterWithAlias = { ...f, column: columnRef };
             addFilterToQueryWithAlias(filterWithAlias as any, params, whereClauses);
           });
           query += ` WHERE ${whereClauses.join(" AND ")}`;
         }
         
-        // Add order by
+        // Add order by (handle join columns with dots)
         if (tableConfig.orderBy) {
-          validateIdentifier(tableConfig.orderBy.column, "column");
-          query += ` ORDER BY ${mainAlias}."${tableConfig.orderBy.column}" ${tableConfig.orderBy.direction === "desc" ? "DESC" : "ASC"}`;
+          let orderColumnRef: string;
+          if (tableConfig.orderBy.column.includes(".")) {
+            const [, colName] = tableConfig.orderBy.column.split(".");
+            validateIdentifier(colName, "column");
+            orderColumnRef = `${joinAlias}."${colName}"`;
+          } else {
+            validateIdentifier(tableConfig.orderBy.column, "column");
+            orderColumnRef = `${mainAlias}."${tableConfig.orderBy.column}"`;
+          }
+          query += ` ORDER BY ${orderColumnRef} ${tableConfig.orderBy.direction === "desc" ? "DESC" : "ASC"}`;
         }
         
         query += ` LIMIT ${rowLimit}`;

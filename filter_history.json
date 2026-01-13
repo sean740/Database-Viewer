@@ -1,0 +1,16 @@
+[
+  {
+    "id": "mtrgpx4q1f4w23ee3ud67",
+    "userId": "d221f7df-63df-4387-abb2-2843b9897203",
+    "database": "Default",
+    "table": "public.vendors",
+    "filters": [
+      {
+        "column": "id",
+        "operator": "eq",
+        "value": "7849"
+      }
+    ],
+    "lastUsedAt": "2026-01-13T18:22:51.875Z"
+  }
+]

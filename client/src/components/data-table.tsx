@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useCallback, useState, useLayoutEffect } from "react";
 import { Loader2 } from "lucide-react";
 import {
   Table,
@@ -27,55 +27,49 @@ function formatCellValue(value: unknown): string {
 
 export function DataTable({ columns, rows, isLoading }: DataTableProps) {
   const topScrollRef = useRef<HTMLDivElement>(null);
-  const topScrollInnerRef = useRef<HTMLDivElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const isScrollingSyncRef = useRef(false);
+  const [scrollWidth, setScrollWidth] = useState(0);
 
-  const syncScroll = useCallback((source: "top" | "table") => {
+  const handleTopScroll = useCallback(() => {
     if (isScrollingSyncRef.current) return;
     isScrollingSyncRef.current = true;
-
-    const topScroll = topScrollRef.current;
-    const tableContainer = tableContainerRef.current;
-
-    if (topScroll && tableContainer) {
-      if (source === "top") {
-        tableContainer.scrollLeft = topScroll.scrollLeft;
-      } else {
-        topScroll.scrollLeft = tableContainer.scrollLeft;
-      }
+    if (topScrollRef.current && tableContainerRef.current) {
+      tableContainerRef.current.scrollLeft = topScrollRef.current.scrollLeft;
     }
-
     requestAnimationFrame(() => {
       isScrollingSyncRef.current = false;
     });
   }, []);
 
-  useEffect(() => {
-    const topScroll = topScrollRef.current;
-    const tableContainer = tableContainerRef.current;
-    const topScrollInner = topScrollInnerRef.current;
-
-    if (!topScroll || !tableContainer || !topScrollInner) return;
-
-    const handleTopScroll = () => syncScroll("top");
-    const handleTableScroll = () => syncScroll("table");
-
-    topScroll.addEventListener("scroll", handleTopScroll);
-    tableContainer.addEventListener("scroll", handleTableScroll);
-
-    const resizeObserver = new ResizeObserver(() => {
-      topScrollInner.style.width = `${tableContainer.scrollWidth}px`;
+  const handleTableScroll = useCallback(() => {
+    if (isScrollingSyncRef.current) return;
+    isScrollingSyncRef.current = true;
+    if (topScrollRef.current && tableContainerRef.current) {
+      topScrollRef.current.scrollLeft = tableContainerRef.current.scrollLeft;
+    }
+    requestAnimationFrame(() => {
+      isScrollingSyncRef.current = false;
     });
+  }, []);
+
+  useLayoutEffect(() => {
+    const tableContainer = tableContainerRef.current;
+    if (!tableContainer) return;
+
+    const updateWidth = () => {
+      setScrollWidth(tableContainer.scrollWidth);
+    };
+
+    updateWidth();
+
+    const resizeObserver = new ResizeObserver(updateWidth);
     resizeObserver.observe(tableContainer);
-    topScrollInner.style.width = `${tableContainer.scrollWidth}px`;
 
     return () => {
-      topScroll.removeEventListener("scroll", handleTopScroll);
-      tableContainer.removeEventListener("scroll", handleTableScroll);
       resizeObserver.disconnect();
     };
-  }, [syncScroll]);
+  }, [columns, rows]);
 
   if (isLoading) {
     return (
@@ -105,12 +99,17 @@ export function DataTable({ columns, rows, isLoading }: DataTableProps) {
     <div className="border rounded-lg bg-card">
       <div 
         ref={topScrollRef}
-        className="overflow-x-auto overflow-y-hidden"
-        style={{ height: "12px" }}
+        className="overflow-x-scroll overflow-y-hidden"
+        style={{ height: "16px" }}
+        onScroll={handleTopScroll}
       >
-        <div ref={topScrollInnerRef} style={{ height: "1px" }} />
+        <div style={{ width: scrollWidth, height: "16px" }} />
       </div>
-      <div ref={tableContainerRef} className="overflow-x-auto">
+      <div 
+        ref={tableContainerRef} 
+        className="overflow-x-auto"
+        onScroll={handleTableScroll}
+      >
         <Table className="min-w-max">
           <TableHeader className="sticky top-0 bg-card z-10">
             <TableRow>

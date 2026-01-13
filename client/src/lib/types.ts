@@ -18,7 +18,7 @@ export interface ColumnInfo {
   isPrimaryKey: boolean;
 }
 
-export type FilterOperator = "eq" | "contains" | "gt" | "gte" | "lt" | "lte";
+export type FilterOperator = "eq" | "contains" | "gt" | "gte" | "lt" | "lte" | "between";
 
 export interface FilterDefinition {
   id: string;
@@ -30,7 +30,7 @@ export interface FilterDefinition {
 export interface ActiveFilter {
   column: string;
   operator: FilterOperator;
-  value: string;
+  value: string | string[];
 }
 
 export interface QueryResponse {
@@ -62,6 +62,7 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   gte: "greater than or equal",
   lt: "less than",
   lte: "less than or equal",
+  between: "between",
 };
 
 export type UserRole = "admin" | "washos_user" | "external_customer";

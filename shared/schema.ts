@@ -30,7 +30,7 @@ export const columnInfoSchema = z.object({
 export type ColumnInfo = z.infer<typeof columnInfoSchema>;
 
 // Filter operator types
-export const filterOperatorSchema = z.enum(["eq", "contains", "gt", "gte", "lt", "lte"]);
+export const filterOperatorSchema = z.enum(["eq", "contains", "gt", "gte", "lt", "lte", "between"]);
 export type FilterOperator = z.infer<typeof filterOperatorSchema>;
 
 // Filter definition (admin-configured)

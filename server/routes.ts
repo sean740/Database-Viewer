@@ -117,7 +117,7 @@ function getPool(dbName: string): Pool {
 function getOperatorSQL(
   operator: FilterOperator,
   paramIndex: number
-): { sql: string; transform?: (v: string) => string } {
+): { sql: string; transform?: (v: any) => any; paramCount?: number } {
   switch (operator) {
     case "eq":
       return { sql: `= $${paramIndex}` };
@@ -134,8 +134,31 @@ function getOperatorSQL(
       return { sql: `< $${paramIndex}` };
     case "lte":
       return { sql: `<= $${paramIndex}` };
+    case "between":
+      return { 
+        sql: `BETWEEN $${paramIndex} AND $${paramIndex + 1}`,
+        paramCount: 2,
+      };
     default:
       throw new Error(`Invalid operator: ${operator}`);
+  }
+}
+
+// Helper to add filter clause and params
+function addFilterToQuery(
+  f: { column: string; operator: string; value: any },
+  params: any[],
+  whereClauses: string[]
+) {
+  validateIdentifier(f.column, "column");
+  const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
+  whereClauses.push(`"${f.column}" ${opInfo.sql}`);
+  
+  if (f.operator === "between" && Array.isArray(f.value)) {
+    // For "between", push both values
+    params.push(f.value[0], f.value[1]);
+  } else {
+    params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
   }
 }
 
@@ -188,15 +211,30 @@ async function getAllowedTables(userId: string): Promise<string[]> {
   return grants.map(g => `${g.database}:${g.tableName}`);
 }
 
+// Helper: Parse table name which may be schema-qualified (e.g., "public.vendors" or "vendors")
+function parseTableName(tableName: string): { schema: string; table: string } | null {
+  if (tableName.includes(".")) {
+    const parts = tableName.split(".");
+    if (parts.length !== 2) return null;
+    const [schema, table] = parts;
+    if (!isValidIdentifier(schema) || !isValidIdentifier(table)) return null;
+    return { schema, table };
+  } else {
+    if (!isValidIdentifier(tableName)) return null;
+    return { schema: "public", table: tableName };
+  }
+}
+
 // Security: Validate table exists and user has access
 async function validateTableAccess(
   dbName: string, 
   tableName: string, 
   user: User
-): Promise<{ valid: boolean; error?: string }> {
+): Promise<{ valid: boolean; error?: string; parsedTable?: { schema: string; table: string } }> {
   try {
-    // Validate identifiers first
-    if (!isValidIdentifier(tableName)) {
+    // Parse and validate table name (handles both "vendors" and "public.vendors")
+    const parsed = parseTableName(tableName);
+    if (!parsed) {
       return { valid: false, error: "Invalid table name" };
     }
 
@@ -204,8 +242,8 @@ async function validateTableAccess(
     const pool = getPool(dbName);
     const tableResult = await pool.query(`
       SELECT table_name FROM information_schema.tables 
-      WHERE table_schema = 'public' AND table_name = $1
-    `, [tableName]);
+      WHERE table_schema = $1 AND table_name = $2
+    `, [parsed.schema, parsed.table]);
     
     if (tableResult.rows.length === 0) {
       return { valid: false, error: "Table not found" };
@@ -213,7 +251,7 @@ async function validateTableAccess(
 
     // Check table visibility settings
     const allSettings = await storage.getAllTableSettings();
-    const settingsKey = `${dbName}:public.${tableName}`;
+    const settingsKey = `${dbName}:${parsed.schema}.${parsed.table}`;
     const tableSettings = allSettings[settingsKey];
     
     // For non-admin users, check visibility
@@ -226,13 +264,13 @@ async function validateTableAccess(
       // For external customers, also check grants
       if (user.role === "external_customer") {
         const allowedTables = await getAllowedTables(user.id);
-        if (!allowedTables.includes(`${dbName}:public.${tableName}`)) {
+        if (!allowedTables.includes(`${dbName}:${parsed.schema}.${parsed.table}`)) {
           return { valid: false, error: "Access denied to this table" };
         }
       }
     }
 
-    return { valid: true };
+    return { valid: true, parsedTable: parsed };
   } catch (err) {
     console.error("Error validating table access:", err);
     return { valid: false, error: "Failed to validate table access" };
@@ -248,6 +286,12 @@ async function validateColumns(
   try {
     if (columns.length === 0) return { valid: true };
 
+    // Parse table name to get schema
+    const parsed = parseTableName(tableName);
+    if (!parsed) {
+      return { valid: false, error: "Invalid table name" };
+    }
+
     // Validate all column identifiers
     for (const col of columns) {
       if (!isValidIdentifier(col)) {
@@ -258,8 +302,8 @@ async function validateColumns(
     const pool = getPool(dbName);
     const columnResult = await pool.query(`
       SELECT column_name FROM information_schema.columns 
-      WHERE table_schema = 'public' AND table_name = $1
-    `, [tableName]);
+      WHERE table_schema = $1 AND table_name = $2
+    `, [parsed.schema, parsed.table]);
     
     const existingColumns = new Set(columnResult.rows.map((r: any) => r.column_name));
     
@@ -325,7 +369,7 @@ async function validateBlockConfig(
     for (const f of config.filters) {
       if (f.column) columnsToValidate.push(f.column);
       // Validate operator
-      const validOps = ["eq", "contains", "gt", "gte", "lt", "lte"];
+      const validOps = ["eq", "contains", "gt", "gte", "lt", "lte", "between"];
       if (!validOps.includes(f.operator)) {
         return { valid: false, error: `Invalid filter operator: ${f.operator}` };
       }
@@ -2095,6 +2139,13 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
       const pool = getPool(config.database);
       const configWithLimit = config as TableBlockConfig | ChartBlockConfig;
       const rowLimit = Math.min((configWithLimit as any).rowLimit || 500, 10000); // Max 10k rows
+      
+      // Parse table name to get schema and table
+      const parsedTable = parseTableName(config.table);
+      if (!parsedTable) {
+        return res.status(400).json({ error: "Invalid table name" });
+      }
+      const tableRef = `"${parsedTable.schema}"."${parsedTable.table}"`;
 
       let query: string;
       let params: any[] = [];
@@ -2105,16 +2156,13 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
           ? tableConfig.columns.map(c => { validateIdentifier(c, "column"); return `"${c}"`; }).join(", ")
           : "*";
         
-        query = `SELECT ${columns} FROM "public"."${config.table}"`;
+        query = `SELECT ${columns} FROM ${tableRef}`;
         
         // Add filters
         if (tableConfig.filters?.length > 0) {
           const whereClauses: string[] = [];
-          tableConfig.filters.forEach((f, i) => {
-            validateIdentifier(f.column, "column");
-            const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
-            whereClauses.push(`"${f.column}" ${opInfo.sql}`);
-            params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+          tableConfig.filters.forEach((f) => {
+            addFilterToQuery(f, params, whereClauses);
           });
           query += ` WHERE ${whereClauses.join(" AND ")}`;
         }
@@ -2154,16 +2202,13 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
             return res.status(400).json({ error: "Invalid aggregate function" });
           }
           selectPart = `"${chartConfig.groupBy}" as label, ${aggFunc}("${chartConfig.yColumn}") as value`;
-          query = `SELECT ${selectPart} FROM "public"."${config.table}"`;
+          query = `SELECT ${selectPart} FROM ${tableRef}`;
           
           // Add filters
           if (chartConfig.filters?.length > 0) {
             const whereClauses: string[] = [];
-            chartConfig.filters.forEach((f, i) => {
-              validateIdentifier(f.column, "column");
-              const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
-              whereClauses.push(`"${f.column}" ${opInfo.sql}`);
-              params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+            chartConfig.filters.forEach((f) => {
+              addFilterToQuery(f, params, whereClauses);
             });
             query += ` WHERE ${whereClauses.join(" AND ")}`;
           }
@@ -2171,16 +2216,13 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
           query += ` GROUP BY "${chartConfig.groupBy}" LIMIT ${rowLimit}`;
         } else {
           selectPart = `"${chartConfig.xColumn}" as label, "${chartConfig.yColumn}" as value`;
-          query = `SELECT ${selectPart} FROM "public"."${config.table}"`;
+          query = `SELECT ${selectPart} FROM ${tableRef}`;
           
           // Add filters
           if (chartConfig.filters?.length > 0) {
             const whereClauses: string[] = [];
-            chartConfig.filters.forEach((f, i) => {
-              validateIdentifier(f.column, "column");
-              const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
-              whereClauses.push(`"${f.column}" ${opInfo.sql}`);
-              params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+            chartConfig.filters.forEach((f) => {
+              addFilterToQuery(f, params, whereClauses);
             });
             query += ` WHERE ${whereClauses.join(" AND ")}`;
           }
@@ -2215,16 +2257,13 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
           return res.status(400).json({ error: "Invalid aggregate function" });
         }
         
-        query = `SELECT ${aggFunc}("${metricConfig.column}") as value FROM "public"."${config.table}"`;
+        query = `SELECT ${aggFunc}("${metricConfig.column}") as value FROM ${tableRef}`;
         
         // Add filters
         if (metricConfig.filters?.length > 0) {
           const whereClauses: string[] = [];
-          metricConfig.filters.forEach((f, i) => {
-            validateIdentifier(f.column, "column");
-            const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
-            whereClauses.push(`"${f.column}" ${opInfo.sql}`);
-            params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+          metricConfig.filters.forEach((f) => {
+            addFilterToQuery(f, params, whereClauses);
           });
           query += ` WHERE ${whereClauses.join(" AND ")}`;
         }

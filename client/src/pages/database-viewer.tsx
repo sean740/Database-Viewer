@@ -449,7 +449,7 @@ export default function DatabaseViewer() {
             />
           )}
 
-          <div className="flex-1 overflow-auto p-6 space-y-4">
+          <div className="flex-1 flex flex-col overflow-hidden p-6 gap-4">
             {nlqEnabled && selectedDatabase && (
               <NLQPanel
                 isEnabled={nlqEnabled}
@@ -470,11 +470,13 @@ export default function DatabaseViewer() {
               />
             )}
 
-            <DataTable
-              columns={visibleColumns}
-              rows={queryResult?.rows || []}
-              isLoading={isLoadingRows}
-            />
+            <div className="flex-1 min-h-0 flex flex-col">
+              <DataTable
+                columns={visibleColumns}
+                rows={queryResult?.rows || []}
+                isLoading={isLoadingRows}
+              />
+            </div>
           </div>
 
           {selectedTable && queryResult && queryResult.totalCount > 0 && (

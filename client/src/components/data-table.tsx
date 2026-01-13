@@ -1,4 +1,3 @@
-import { useRef, useCallback, useState, useLayoutEffect } from "react";
 import { Loader2 } from "lucide-react";
 import {
   Table,
@@ -25,123 +24,7 @@ function formatCellValue(value: unknown): string {
   return String(value);
 }
 
-interface CustomScrollbarProps {
-  scrollWidth: number;
-  clientWidth: number;
-  scrollLeft: number;
-  onScroll: (scrollLeft: number) => void;
-}
-
-function CustomScrollbar({ scrollWidth, clientWidth, scrollLeft, onScroll }: CustomScrollbarProps) {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const isDraggingRef = useRef(false);
-  const startXRef = useRef(0);
-  const startScrollLeftRef = useRef(0);
-
-  const thumbWidth = scrollWidth > 0 ? Math.max((clientWidth / scrollWidth) * clientWidth, 40) : 0;
-  const maxThumbLeft = clientWidth - thumbWidth;
-  const thumbLeft = scrollWidth > clientWidth 
-    ? (scrollLeft / (scrollWidth - clientWidth)) * maxThumbLeft 
-    : 0;
-
-  const showScrollbar = scrollWidth > clientWidth;
-
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isDraggingRef.current = true;
-    startXRef.current = e.clientX;
-    startScrollLeftRef.current = scrollLeft;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDraggingRef.current) return;
-      const deltaX = e.clientX - startXRef.current;
-      const scrollRatio = (scrollWidth - clientWidth) / maxThumbLeft;
-      const newScrollLeft = Math.max(0, Math.min(scrollWidth - clientWidth, startScrollLeftRef.current + deltaX * scrollRatio));
-      onScroll(newScrollLeft);
-    };
-
-    const handleMouseUp = () => {
-      isDraggingRef.current = false;
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-  }, [scrollLeft, scrollWidth, clientWidth, maxThumbLeft, onScroll]);
-
-  const handleTrackClick = useCallback((e: React.MouseEvent) => {
-    if (!trackRef.current) return;
-    const rect = trackRef.current.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickRatio = clickX / clientWidth;
-    const newScrollLeft = Math.max(0, Math.min(scrollWidth - clientWidth, clickRatio * scrollWidth - clientWidth / 2));
-    onScroll(newScrollLeft);
-  }, [clientWidth, scrollWidth, onScroll]);
-
-  if (!showScrollbar) return null;
-
-  return (
-    <div 
-      ref={trackRef}
-      className="h-3 bg-muted/30 rounded-md cursor-pointer relative"
-      onClick={handleTrackClick}
-    >
-      <div
-        className="absolute top-0.5 bottom-0.5 bg-muted-foreground/40 rounded-md cursor-grab active:cursor-grabbing hover:bg-muted-foreground/60 transition-colors"
-        style={{
-          left: thumbLeft,
-          width: thumbWidth,
-        }}
-        onMouseDown={handleMouseDown}
-        onClick={(e) => e.stopPropagation()}
-      />
-    </div>
-  );
-}
-
 export function DataTable({ columns, rows, isLoading }: DataTableProps) {
-  const tableContainerRef = useRef<HTMLDivElement>(null);
-  const [scrollState, setScrollState] = useState({ scrollWidth: 0, clientWidth: 0, scrollLeft: 0 });
-
-  const handleTableScroll = useCallback(() => {
-    if (tableContainerRef.current) {
-      setScrollState(prev => ({
-        ...prev,
-        scrollLeft: tableContainerRef.current!.scrollLeft,
-      }));
-    }
-  }, []);
-
-  const handleCustomScroll = useCallback((newScrollLeft: number) => {
-    if (tableContainerRef.current) {
-      tableContainerRef.current.scrollLeft = newScrollLeft;
-      setScrollState(prev => ({ ...prev, scrollLeft: newScrollLeft }));
-    }
-  }, []);
-
-  useLayoutEffect(() => {
-    const tableContainer = tableContainerRef.current;
-    if (!tableContainer) return;
-
-    const updateDimensions = () => {
-      setScrollState({
-        scrollWidth: tableContainer.scrollWidth,
-        clientWidth: tableContainer.clientWidth,
-        scrollLeft: tableContainer.scrollLeft,
-      });
-    };
-
-    updateDimensions();
-
-    const resizeObserver = new ResizeObserver(updateDimensions);
-    resizeObserver.observe(tableContainer);
-
-    return () => {
-      resizeObserver.disconnect();
-    };
-  }, [columns, rows]);
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -167,20 +50,8 @@ export function DataTable({ columns, rows, isLoading }: DataTableProps) {
   }
 
   return (
-    <div className="border rounded-lg bg-card">
-      <div className="px-2 pt-2">
-        <CustomScrollbar
-          scrollWidth={scrollState.scrollWidth}
-          clientWidth={scrollState.clientWidth}
-          scrollLeft={scrollState.scrollLeft}
-          onScroll={handleCustomScroll}
-        />
-      </div>
-      <div 
-        ref={tableContainerRef} 
-        className="overflow-x-auto scrollbar-always-visible"
-        onScroll={handleTableScroll}
-      >
+    <div className="border rounded-lg bg-card flex flex-col min-h-0 flex-1">
+      <div className="overflow-auto flex-1 scrollbar-always-visible">
         <Table className="min-w-max">
           <TableHeader className="sticky top-0 bg-card z-10">
             <TableRow>

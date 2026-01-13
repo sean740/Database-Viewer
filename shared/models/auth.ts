@@ -104,14 +104,23 @@ export const reportBlocks = pgTable("report_blocks", {
 export type ReportBlock = typeof reportBlocks.$inferSelect;
 export type InsertReportBlock = typeof reportBlocks.$inferInsert;
 
+// Join configuration for report blocks
+export interface JoinConfig {
+  table: string; // The table to join (e.g., "public.vendors")
+  on: [string, string]; // [fromColumn, toColumn] - e.g., ["vendor_id", "id"]
+  type?: "inner" | "left"; // Join type, defaults to "left"
+  columns?: string[]; // Columns to select from joined table
+}
+
 // Report block configuration types
 export interface TableBlockConfig {
   database: string;
   table: string;
   columns: string[];
-  filters: { column: string; operator: string; value: string }[];
+  filters: { column: string; operator: string; value: string | string[] }[];
   orderBy?: { column: string; direction: "asc" | "desc" };
   rowLimit: number;
+  join?: JoinConfig;
 }
 
 export interface ChartBlockConfig {

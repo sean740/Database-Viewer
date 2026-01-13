@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
@@ -174,6 +174,7 @@ export default function DatabaseViewer() {
       return res.json();
     },
     enabled: !!selectedDatabase && !!selectedTable,
+    placeholderData: keepPreviousData,
   });
 
   // Save filter definitions mutation

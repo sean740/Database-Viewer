@@ -8,12 +8,14 @@ import NotFound from "@/pages/not-found";
 import DatabaseViewer from "@/pages/database-viewer";
 import LandingPage from "@/pages/landing-page";
 import AdminPage from "@/pages/admin-page";
+import MyReports from "@/pages/my-reports";
 import { Loader2 } from "lucide-react";
 
 function AuthenticatedRouter() {
   return (
     <Switch>
       <Route path="/" component={DatabaseViewer} />
+      <Route path="/my-reports" component={MyReports} />
       <Route path="/admin" component={AdminPage} />
       <Route component={NotFound} />
     </Switch>

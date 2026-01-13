@@ -1,4 +1,4 @@
-import { Database, Shield, LogOut } from "lucide-react";
+import { Database, Shield, LogOut, FileText } from "lucide-react";
 import { Link } from "wouter";
 import { ThemeToggle } from "./theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -21,17 +21,19 @@ import { useAuth } from "@/hooks/use-auth";
 import type { DatabaseConnection, User } from "@/lib/types";
 
 interface HeaderProps {
-  databases: DatabaseConnection[];
-  selectedDatabase: string;
-  onDatabaseChange: (name: string) => void;
-  isLoading: boolean;
+  databases?: DatabaseConnection[];
+  selectedDatabase?: string;
+  onDatabaseChange?: (name: string) => void;
+  isLoading?: boolean;
+  showDatabaseSelector?: boolean;
 }
 
 export function Header({
-  databases,
-  selectedDatabase,
-  onDatabaseChange,
-  isLoading,
+  databases = [],
+  selectedDatabase = "",
+  onDatabaseChange = () => {},
+  isLoading = false,
+  showDatabaseSelector = true,
 }: HeaderProps) {
   const { user, logout } = useAuth();
 
@@ -49,25 +51,27 @@ export function Header({
       </div>
 
       <div className="flex items-center gap-4">
-        <Select
-          value={selectedDatabase}
-          onValueChange={onDatabaseChange}
-          disabled={isLoading || databases.length === 0}
-        >
-          <SelectTrigger
-            className="w-[200px]"
-            data-testid="select-database"
+        {showDatabaseSelector && (
+          <Select
+            value={selectedDatabase}
+            onValueChange={onDatabaseChange}
+            disabled={isLoading || databases.length === 0}
           >
-            <SelectValue placeholder="Select database..." />
-          </SelectTrigger>
-          <SelectContent>
-            {databases.map((db) => (
-              <SelectItem key={db.name} value={db.name} data-testid={`option-database-${db.name}`}>
-                {db.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+            <SelectTrigger
+              className="w-[200px]"
+              data-testid="select-database"
+            >
+              <SelectValue placeholder="Select database..." />
+            </SelectTrigger>
+            <SelectContent>
+              {databases.map((db) => (
+                <SelectItem key={db.name} value={db.name} data-testid={`option-database-${db.name}`}>
+                  {db.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
 
         <ThemeToggle />
 
@@ -89,17 +93,21 @@ export function Header({
               </p>
             </div>
             <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link href="/my-reports" className="flex items-center cursor-pointer" data-testid="link-my-reports">
+                <FileText className="mr-2 h-4 w-4" />
+                My Reports
+              </Link>
+            </DropdownMenuItem>
             {user?.role === "admin" && (
-              <>
-                <DropdownMenuItem asChild>
-                  <Link href="/admin" className="flex items-center cursor-pointer" data-testid="link-admin">
-                    <Shield className="mr-2 h-4 w-4" />
-                    Admin Panel
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-              </>
+              <DropdownMenuItem asChild>
+                <Link href="/admin" className="flex items-center cursor-pointer" data-testid="link-admin">
+                  <Shield className="mr-2 h-4 w-4" />
+                  Admin Panel
+                </Link>
+              </DropdownMenuItem>
             )}
+            <DropdownMenuSeparator />
             <DropdownMenuItem 
               onClick={() => logout()} 
               className="flex items-center cursor-pointer text-destructive" 

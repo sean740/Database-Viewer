@@ -104,6 +104,17 @@ filters.json       # Admin-configured filter definitions (per table)
 - Exports current page (50 rows) with applied filters
 - Proper CSV escaping for commas, quotes, and newlines
 
+### My Reports (AI-Powered Custom Reporting)
+- Each user has their own personalized reporting workspace at `/my-reports`
+- Users can create multiple report pages with tables, charts, and metrics
+- AI chat assistant helps users build reports by describing what they want in natural language
+- All reports are user-isolated - users can only see and modify their own reports
+- Security features:
+  - AI-generated actions are validated against database metadata and user permissions
+  - Tables/columns are verified to exist before queries are executed
+  - External customers can only access their granted tables
+  - All report queries are audited
+
 ## Development
 
 The app runs with `npm run dev` which starts both the Express backend and Vite frontend dev server.

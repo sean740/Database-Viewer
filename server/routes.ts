@@ -7,7 +7,23 @@ import { eq, and, desc, count } from "drizzle-orm";
 import { storage } from "./storage";
 import { db } from "./db";
 import { setupAuth, registerAuthRoutes, isAuthenticated, authStorage } from "./replit_integrations/auth";
-import { users, tableGrants, auditLogs, type UserRole, type User } from "@shared/schema";
+import { 
+  users, 
+  tableGrants, 
+  auditLogs, 
+  reportPages, 
+  reportBlocks, 
+  reportChatSessions,
+  type UserRole, 
+  type User,
+  type ReportPage,
+  type ReportBlock,
+  type ReportBlockConfig,
+  type TableBlockConfig,
+  type ChartBlockConfig,
+  type MetricBlockConfig,
+  type ChatMessage,
+} from "@shared/schema";
 import type {
   DatabaseConnection,
   TableInfo,
@@ -170,6 +186,175 @@ function requireRole(...allowedRoles: UserRole[]) {
 async function getAllowedTables(userId: string): Promise<string[]> {
   const grants = await db.select().from(tableGrants).where(eq(tableGrants.userId, userId));
   return grants.map(g => `${g.database}:${g.tableName}`);
+}
+
+// Security: Validate table exists and user has access
+async function validateTableAccess(
+  dbName: string, 
+  tableName: string, 
+  user: User
+): Promise<{ valid: boolean; error?: string }> {
+  try {
+    // Validate identifiers first
+    if (!isValidIdentifier(tableName)) {
+      return { valid: false, error: "Invalid table name" };
+    }
+
+    // Get the pool and check if table exists
+    const pool = getPool(dbName);
+    const tableResult = await pool.query(`
+      SELECT table_name FROM information_schema.tables 
+      WHERE table_schema = 'public' AND table_name = $1
+    `, [tableName]);
+    
+    if (tableResult.rows.length === 0) {
+      return { valid: false, error: "Table not found" };
+    }
+
+    // Check table visibility settings
+    const allSettings = await storage.getAllTableSettings();
+    const settingsKey = `${dbName}:public.${tableName}`;
+    const tableSettings = allSettings[settingsKey];
+    
+    // For non-admin users, check visibility
+    if (user.role !== "admin") {
+      // Check if table is hidden
+      if (tableSettings && tableSettings.isVisible === false) {
+        return { valid: false, error: "Access denied to this table" };
+      }
+      
+      // For external customers, also check grants
+      if (user.role === "external_customer") {
+        const allowedTables = await getAllowedTables(user.id);
+        if (!allowedTables.includes(`${dbName}:public.${tableName}`)) {
+          return { valid: false, error: "Access denied to this table" };
+        }
+      }
+    }
+
+    return { valid: true };
+  } catch (err) {
+    console.error("Error validating table access:", err);
+    return { valid: false, error: "Failed to validate table access" };
+  }
+}
+
+// Security: Validate columns exist in table
+async function validateColumns(
+  dbName: string, 
+  tableName: string, 
+  columns: string[]
+): Promise<{ valid: boolean; error?: string }> {
+  try {
+    if (columns.length === 0) return { valid: true };
+
+    // Validate all column identifiers
+    for (const col of columns) {
+      if (!isValidIdentifier(col)) {
+        return { valid: false, error: `Invalid column name: ${col}` };
+      }
+    }
+
+    const pool = getPool(dbName);
+    const columnResult = await pool.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_schema = 'public' AND table_name = $1
+    `, [tableName]);
+    
+    const existingColumns = new Set(columnResult.rows.map((r: any) => r.column_name));
+    
+    for (const col of columns) {
+      if (!existingColumns.has(col)) {
+        return { valid: false, error: `Column not found: ${col}` };
+      }
+    }
+
+    return { valid: true };
+  } catch (err) {
+    console.error("Error validating columns:", err);
+    return { valid: false, error: "Failed to validate columns" };
+  }
+}
+
+// Security: Validate report block config against database metadata
+async function validateBlockConfig(
+  config: any, 
+  kind: string,
+  user: User
+): Promise<{ valid: boolean; error?: string }> {
+  if (kind === "text") {
+    return { valid: true };
+  }
+
+  if (!config.database || !config.table) {
+    return { valid: false, error: "Database and table are required" };
+  }
+
+  // Validate database exists
+  const dbs = getDatabaseConnections();
+  if (!dbs.find(d => d.name === config.database)) {
+    return { valid: false, error: "Database not found" };
+  }
+
+  // Validate table access
+  const tableValidation = await validateTableAccess(config.database, config.table, user);
+  if (!tableValidation.valid) {
+    return tableValidation;
+  }
+
+  // Collect all columns that need validation
+  const columnsToValidate: string[] = [];
+
+  if (kind === "table" && config.columns?.length > 0) {
+    columnsToValidate.push(...config.columns);
+  }
+  if (kind === "table" && config.orderBy?.column) {
+    columnsToValidate.push(config.orderBy.column);
+  }
+  if (kind === "chart") {
+    if (config.xColumn) columnsToValidate.push(config.xColumn);
+    if (config.yColumn) columnsToValidate.push(config.yColumn);
+    if (config.groupBy) columnsToValidate.push(config.groupBy);
+  }
+  if (kind === "metric" && config.column) {
+    columnsToValidate.push(config.column);
+  }
+
+  // Validate filter columns
+  if (config.filters?.length > 0) {
+    for (const f of config.filters) {
+      if (f.column) columnsToValidate.push(f.column);
+      // Validate operator
+      const validOps = ["eq", "contains", "gt", "gte", "lt", "lte"];
+      if (!validOps.includes(f.operator)) {
+        return { valid: false, error: `Invalid filter operator: ${f.operator}` };
+      }
+    }
+  }
+
+  // Validate all columns exist
+  const columnValidation = await validateColumns(config.database, config.table, columnsToValidate);
+  if (!columnValidation.valid) {
+    return columnValidation;
+  }
+
+  // Validate aggregate function if present
+  if (config.aggregateFunction) {
+    const validAggs = ["count", "sum", "avg", "min", "max"];
+    if (!validAggs.includes(config.aggregateFunction.toLowerCase())) {
+      return { valid: false, error: `Invalid aggregate function: ${config.aggregateFunction}` };
+    }
+  }
+
+  // Validate chart type if present
+  if (kind === "chart" && config.chartType) {
+    const validChartTypes = ["bar", "line", "pie", "area"];
+    if (!validChartTypes.includes(config.chartType)) {
+      return { valid: false, error: `Invalid chart type: ${config.chartType}` };
+    }
+  }
+
+  return { valid: true };
 }
 
 // Audit logging for data access - persisted to database
@@ -1490,6 +1675,821 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
         error: err instanceof Error ? err.message : "Failed to process followup",
       });
     }
+  });
+
+  // ========== REPORT API ENDPOINTS ==========
+  
+  // Rate limiter for report operations
+  const reportLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    message: { error: "Too many report requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  
+  // Rate limiter for AI report operations
+  const reportAILimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 15,
+    message: { error: "Too many AI requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  // Get all report pages for current user
+  app.get("/api/reports/pages", isAuthenticated, reportLimiter, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const pages = await db
+        .select()
+        .from(reportPages)
+        .where(and(eq(reportPages.userId, userId), eq(reportPages.isArchived, false)))
+        .orderBy(desc(reportPages.updatedAt));
+
+      res.json(pages);
+    } catch (err) {
+      console.error("Error fetching report pages:", err);
+      res.status(500).json({ error: "Failed to fetch report pages" });
+    }
+  });
+
+  // Create a new report page
+  app.post("/api/reports/pages", isAuthenticated, reportLimiter, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      if (!userId || !user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { title, description } = req.body;
+      if (!title || typeof title !== "string" || title.trim().length === 0) {
+        return res.status(400).json({ error: "Title is required" });
+      }
+
+      const [newPage] = await db
+        .insert(reportPages)
+        .values({
+          userId,
+          title: title.trim(),
+          description: description?.trim() || null,
+        })
+        .returning();
+
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "REPORT_CREATE",
+        details: `Created report page: ${newPage.title}`,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.status(201).json(newPage);
+    } catch (err) {
+      console.error("Error creating report page:", err);
+      res.status(500).json({ error: "Failed to create report page" });
+    }
+  });
+
+  // Get a single report page with its blocks
+  app.get("/api/reports/pages/:id", isAuthenticated, reportLimiter, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const [page] = await db
+        .select()
+        .from(reportPages)
+        .where(and(eq(reportPages.id, id), eq(reportPages.userId, userId)));
+
+      if (!page) {
+        return res.status(404).json({ error: "Report page not found" });
+      }
+
+      const blocks = await db
+        .select()
+        .from(reportBlocks)
+        .where(eq(reportBlocks.pageId, id));
+
+      res.json({ ...page, blocks });
+    } catch (err) {
+      console.error("Error fetching report page:", err);
+      res.status(500).json({ error: "Failed to fetch report page" });
+    }
+  });
+
+  // Update a report page
+  app.patch("/api/reports/pages/:id", isAuthenticated, reportLimiter, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      if (!userId || !user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const { title, description } = req.body;
+
+      // Verify ownership
+      const [existing] = await db
+        .select()
+        .from(reportPages)
+        .where(and(eq(reportPages.id, id), eq(reportPages.userId, userId)));
+
+      if (!existing) {
+        return res.status(404).json({ error: "Report page not found" });
+      }
+
+      const updates: Partial<typeof reportPages.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+      if (title !== undefined) updates.title = title.trim();
+      if (description !== undefined) updates.description = description?.trim() || null;
+
+      const [updated] = await db
+        .update(reportPages)
+        .set(updates)
+        .where(eq(reportPages.id, id))
+        .returning();
+
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "REPORT_UPDATE",
+        details: `Updated report page: ${updated.title}`,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.json(updated);
+    } catch (err) {
+      console.error("Error updating report page:", err);
+      res.status(500).json({ error: "Failed to update report page" });
+    }
+  });
+
+  // Delete (archive) a report page
+  app.delete("/api/reports/pages/:id", isAuthenticated, reportLimiter, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      if (!userId || !user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+
+      // Verify ownership
+      const [existing] = await db
+        .select()
+        .from(reportPages)
+        .where(and(eq(reportPages.id, id), eq(reportPages.userId, userId)));
+
+      if (!existing) {
+        return res.status(404).json({ error: "Report page not found" });
+      }
+
+      await db
+        .update(reportPages)
+        .set({ isArchived: true, updatedAt: new Date() })
+        .where(eq(reportPages.id, id));
+
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "REPORT_DELETE",
+        details: `Archived report page: ${existing.title}`,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Error deleting report page:", err);
+      res.status(500).json({ error: "Failed to delete report page" });
+    }
+  });
+
+  // Create a report block
+  app.post("/api/reports/pages/:pageId/blocks", isAuthenticated, reportLimiter, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      if (!userId || !user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { pageId } = req.params;
+      const { kind, title, position, config } = req.body;
+
+      // Verify page ownership
+      const [page] = await db
+        .select()
+        .from(reportPages)
+        .where(and(eq(reportPages.id, pageId), eq(reportPages.userId, userId)));
+
+      if (!page) {
+        return res.status(404).json({ error: "Report page not found" });
+      }
+
+      // Validate block kind
+      const validKinds = ["table", "chart", "metric", "text"];
+      if (!validKinds.includes(kind)) {
+        return res.status(400).json({ error: "Invalid block kind" });
+      }
+
+      // Security: Comprehensive validation of block config
+      const validation = await validateBlockConfig(config, kind, user);
+      if (!validation.valid) {
+        return res.status(400).json({ error: validation.error });
+      }
+
+      const [newBlock] = await db
+        .insert(reportBlocks)
+        .values({
+          pageId,
+          kind,
+          title: title || null,
+          position: position || { row: 0, col: 0, width: 6, height: 4 },
+          config,
+        })
+        .returning();
+
+      // Update page timestamp
+      await db
+        .update(reportPages)
+        .set({ updatedAt: new Date() })
+        .where(eq(reportPages.id, pageId));
+
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "REPORT_BLOCK_CREATE",
+        details: `Created ${kind} block in report: ${page.title}`,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.status(201).json(newBlock);
+    } catch (err) {
+      console.error("Error creating report block:", err);
+      res.status(500).json({ error: "Failed to create report block" });
+    }
+  });
+
+  // Update a report block
+  app.patch("/api/reports/blocks/:id", isAuthenticated, reportLimiter, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      if (!userId || !user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+      const { title, position, config } = req.body;
+
+      // Get block and verify ownership through page
+      const [block] = await db.select().from(reportBlocks).where(eq(reportBlocks.id, id));
+      if (!block) {
+        return res.status(404).json({ error: "Block not found" });
+      }
+
+      const [page] = await db
+        .select()
+        .from(reportPages)
+        .where(and(eq(reportPages.id, block.pageId), eq(reportPages.userId, userId)));
+
+      if (!page) {
+        return res.status(404).json({ error: "Report page not found" });
+      }
+
+      // Security: Validate config if provided
+      if (config) {
+        const validation = await validateBlockConfig(config, block.kind, user);
+        if (!validation.valid) {
+          return res.status(400).json({ error: validation.error });
+        }
+      }
+
+      const updates: Partial<typeof reportBlocks.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+      if (title !== undefined) updates.title = title;
+      if (position !== undefined) updates.position = position;
+      if (config !== undefined) updates.config = config;
+
+      const [updated] = await db
+        .update(reportBlocks)
+        .set(updates)
+        .where(eq(reportBlocks.id, id))
+        .returning();
+
+      // Update page timestamp
+      await db
+        .update(reportPages)
+        .set({ updatedAt: new Date() })
+        .where(eq(reportPages.id, block.pageId));
+
+      res.json(updated);
+    } catch (err) {
+      console.error("Error updating report block:", err);
+      res.status(500).json({ error: "Failed to update report block" });
+    }
+  });
+
+  // Delete a report block
+  app.delete("/api/reports/blocks/:id", isAuthenticated, reportLimiter, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      if (!userId || !user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+
+      // Get block and verify ownership through page
+      const [block] = await db.select().from(reportBlocks).where(eq(reportBlocks.id, id));
+      if (!block) {
+        return res.status(404).json({ error: "Block not found" });
+      }
+
+      const [page] = await db
+        .select()
+        .from(reportPages)
+        .where(and(eq(reportPages.id, block.pageId), eq(reportPages.userId, userId)));
+
+      if (!page) {
+        return res.status(404).json({ error: "Report page not found" });
+      }
+
+      await db.delete(reportBlocks).where(eq(reportBlocks.id, id));
+
+      // Update page timestamp
+      await db
+        .update(reportPages)
+        .set({ updatedAt: new Date() })
+        .where(eq(reportPages.id, block.pageId));
+
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "REPORT_BLOCK_DELETE",
+        details: `Deleted ${block.kind} block from report: ${page.title}`,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Error deleting report block:", err);
+      res.status(500).json({ error: "Failed to delete report block" });
+    }
+  });
+
+  // Execute a report block query (with safety guardrails)
+  app.post("/api/reports/blocks/:id/run", isAuthenticated, reportLimiter, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      if (!userId || !user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { id } = req.params;
+
+      // Get block and verify ownership through page
+      const [block] = await db.select().from(reportBlocks).where(eq(reportBlocks.id, id));
+      if (!block) {
+        return res.status(404).json({ error: "Block not found" });
+      }
+
+      const [page] = await db
+        .select()
+        .from(reportPages)
+        .where(and(eq(reportPages.id, block.pageId), eq(reportPages.userId, userId)));
+
+      if (!page) {
+        return res.status(404).json({ error: "Report page not found" });
+      }
+
+      if (block.kind === "text") {
+        return res.json({ type: "text", content: (block.config as any).content });
+      }
+
+      const config = block.config as TableBlockConfig | ChartBlockConfig | MetricBlockConfig;
+      
+      // Security: Comprehensive validation before executing any query
+      const validation = await validateBlockConfig(config, block.kind, user);
+      if (!validation.valid) {
+        // Distinguish between permission errors (403) and validation errors (400)
+        const statusCode = validation.error?.includes("Access denied") ? 403 : 400;
+        return res.status(statusCode).json({ error: validation.error });
+      }
+      
+      const pool = getPool(config.database);
+      const configWithLimit = config as TableBlockConfig | ChartBlockConfig;
+      const rowLimit = Math.min((configWithLimit as any).rowLimit || 500, 10000); // Max 10k rows
+
+      let query: string;
+      let params: any[] = [];
+
+      if (block.kind === "table") {
+        const tableConfig = config as TableBlockConfig;
+        const columns = tableConfig.columns?.length > 0 
+          ? tableConfig.columns.map(c => { validateIdentifier(c, "column"); return `"${c}"`; }).join(", ")
+          : "*";
+        
+        query = `SELECT ${columns} FROM "public"."${config.table}"`;
+        
+        // Add filters
+        if (tableConfig.filters?.length > 0) {
+          const whereClauses: string[] = [];
+          tableConfig.filters.forEach((f, i) => {
+            validateIdentifier(f.column, "column");
+            const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
+            whereClauses.push(`"${f.column}" ${opInfo.sql}`);
+            params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+          });
+          query += ` WHERE ${whereClauses.join(" AND ")}`;
+        }
+        
+        // Add order by
+        if (tableConfig.orderBy) {
+          validateIdentifier(tableConfig.orderBy.column, "column");
+          query += ` ORDER BY "${tableConfig.orderBy.column}" ${tableConfig.orderBy.direction === "desc" ? "DESC" : "ASC"}`;
+        }
+        
+        query += ` LIMIT ${rowLimit}`;
+        
+        const result = await pool.query(query, params);
+        
+        await logAudit({
+          userId,
+          userEmail: user.email,
+          action: "REPORT_QUERY",
+          database: config.database,
+          table: config.table,
+          details: `Table block query: ${result.rows.length} rows`,
+          ip: req.ip || req.socket.remoteAddress,
+        });
+        
+        res.json({ type: "table", rows: result.rows, rowCount: result.rows.length });
+        
+      } else if (block.kind === "chart") {
+        const chartConfig = config as ChartBlockConfig;
+        validateIdentifier(chartConfig.xColumn, "column");
+        validateIdentifier(chartConfig.yColumn, "column");
+        
+        let selectPart: string;
+        if (chartConfig.aggregateFunction && chartConfig.groupBy) {
+          validateIdentifier(chartConfig.groupBy, "column");
+          const aggFunc = chartConfig.aggregateFunction.toUpperCase();
+          if (!["COUNT", "SUM", "AVG", "MIN", "MAX"].includes(aggFunc)) {
+            return res.status(400).json({ error: "Invalid aggregate function" });
+          }
+          selectPart = `"${chartConfig.groupBy}" as label, ${aggFunc}("${chartConfig.yColumn}") as value`;
+          query = `SELECT ${selectPart} FROM "public"."${config.table}"`;
+          
+          // Add filters
+          if (chartConfig.filters?.length > 0) {
+            const whereClauses: string[] = [];
+            chartConfig.filters.forEach((f, i) => {
+              validateIdentifier(f.column, "column");
+              const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
+              whereClauses.push(`"${f.column}" ${opInfo.sql}`);
+              params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+            });
+            query += ` WHERE ${whereClauses.join(" AND ")}`;
+          }
+          
+          query += ` GROUP BY "${chartConfig.groupBy}" LIMIT ${rowLimit}`;
+        } else {
+          selectPart = `"${chartConfig.xColumn}" as label, "${chartConfig.yColumn}" as value`;
+          query = `SELECT ${selectPart} FROM "public"."${config.table}"`;
+          
+          // Add filters
+          if (chartConfig.filters?.length > 0) {
+            const whereClauses: string[] = [];
+            chartConfig.filters.forEach((f, i) => {
+              validateIdentifier(f.column, "column");
+              const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
+              whereClauses.push(`"${f.column}" ${opInfo.sql}`);
+              params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+            });
+            query += ` WHERE ${whereClauses.join(" AND ")}`;
+          }
+          
+          query += ` LIMIT ${rowLimit}`;
+        }
+        
+        const result = await pool.query(query, params);
+        
+        await logAudit({
+          userId,
+          userEmail: user.email,
+          action: "REPORT_QUERY",
+          database: config.database,
+          table: config.table,
+          details: `Chart block query: ${result.rows.length} data points`,
+          ip: req.ip || req.socket.remoteAddress,
+        });
+        
+        res.json({ 
+          type: "chart", 
+          chartType: chartConfig.chartType,
+          data: result.rows,
+        });
+        
+      } else if (block.kind === "metric") {
+        const metricConfig = config as MetricBlockConfig;
+        validateIdentifier(metricConfig.column, "column");
+        
+        const aggFunc = metricConfig.aggregateFunction.toUpperCase();
+        if (!["COUNT", "SUM", "AVG", "MIN", "MAX"].includes(aggFunc)) {
+          return res.status(400).json({ error: "Invalid aggregate function" });
+        }
+        
+        query = `SELECT ${aggFunc}("${metricConfig.column}") as value FROM "public"."${config.table}"`;
+        
+        // Add filters
+        if (metricConfig.filters?.length > 0) {
+          const whereClauses: string[] = [];
+          metricConfig.filters.forEach((f, i) => {
+            validateIdentifier(f.column, "column");
+            const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
+            whereClauses.push(`"${f.column}" ${opInfo.sql}`);
+            params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+          });
+          query += ` WHERE ${whereClauses.join(" AND ")}`;
+        }
+        
+        const result = await pool.query(query, params);
+        
+        await logAudit({
+          userId,
+          userEmail: user.email,
+          action: "REPORT_QUERY",
+          database: config.database,
+          table: config.table,
+          details: `Metric block query: ${metricConfig.aggregateFunction}(${metricConfig.column})`,
+          ip: req.ip || req.socket.remoteAddress,
+        });
+        
+        res.json({
+          type: "metric",
+          value: result.rows[0]?.value || 0,
+          label: metricConfig.label || `${metricConfig.aggregateFunction}(${metricConfig.column})`,
+          format: metricConfig.format || "number",
+        });
+      }
+    } catch (err) {
+      console.error("Error running report block:", err);
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to run report block" });
+    }
+  });
+
+  // AI Chat endpoint for report building
+  app.post("/api/reports/ai/chat", isAuthenticated, reportAILimiter, async (req, res) => {
+    try {
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      if (!userId || !user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { pageId, message } = req.body;
+      if (!pageId || !message) {
+        return res.status(400).json({ error: "pageId and message are required" });
+      }
+
+      // Verify page ownership
+      const [page] = await db
+        .select()
+        .from(reportPages)
+        .where(and(eq(reportPages.id, pageId), eq(reportPages.userId, userId)));
+
+      if (!page) {
+        return res.status(404).json({ error: "Report page not found" });
+      }
+
+      const client = getOpenAIClient();
+      if (!client) {
+        return res.status(503).json({ error: "AI service not available" });
+      }
+
+      // Get available tables for context
+      const dbs = getDatabaseConnections();
+      let availableTables: { database: string; tables: TableInfo[] }[] = [];
+      
+      for (const dbConn of dbs) {
+        try {
+          const pool = getPool(dbConn.name);
+          const tableResult = await pool.query(`
+            SELECT table_schema as schema, table_name as name
+            FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            ORDER BY table_name
+          `);
+          
+          const allSettings = await storage.getAllTableSettings();
+          let tables: TableInfo[] = tableResult.rows.map((t: any) => ({
+            schema: t.schema,
+            name: t.name,
+            fullName: `${t.schema}.${t.name}`,
+            displayName: allSettings[`${dbConn.name}:${t.schema}.${t.name}`]?.displayName || null,
+            isVisible: allSettings[`${dbConn.name}:${t.schema}.${t.name}`]?.isVisible ?? true,
+          }));
+
+          // Filter by visibility and grants for external customers
+          if (user.role === "external_customer") {
+            const allowedTables = await getAllowedTables(userId);
+            tables = tables.filter(t => allowedTables.includes(`${dbConn.name}:${t.fullName}`));
+          } else {
+            tables = tables.filter(t => t.isVisible);
+          }
+
+          availableTables.push({ database: dbConn.name, tables });
+        } catch (err) {
+          console.error(`Error fetching tables for ${dbConn.name}:`, err);
+        }
+      }
+
+      // Get current blocks for context
+      const blocks = await db.select().from(reportBlocks).where(eq(reportBlocks.pageId, pageId));
+
+      // Get or create chat session
+      let [session] = await db
+        .select()
+        .from(reportChatSessions)
+        .where(eq(reportChatSessions.pageId, pageId));
+
+      if (!session) {
+        [session] = await db
+          .insert(reportChatSessions)
+          .values({ pageId, messages: [] })
+          .returning();
+      }
+
+      const messages: ChatMessage[] = session.messages || [];
+      messages.push({
+        role: "user",
+        content: message,
+        timestamp: new Date().toISOString(),
+      });
+
+      const systemPrompt = `You are a helpful report building assistant. You help users create custom reports with tables, charts, and metrics.
+
+AVAILABLE TABLES:
+${availableTables.map(db => 
+  `Database: ${db.database}\n${db.tables.map(t => `  - ${t.displayName || t.name} (${t.fullName})`).join("\n")}`
+).join("\n\n")}
+
+CURRENT REPORT: "${page.title}"
+CURRENT BLOCKS: ${blocks.length === 0 ? "None yet" : blocks.map(b => `${b.kind}: ${b.title || "Untitled"}`).join(", ")}
+
+You can help users by:
+1. Suggesting which tables to use for their reporting needs
+2. Recommending chart types (bar, line, pie, area) for their data
+3. Explaining what metrics (count, sum, avg, min, max) would be useful
+4. Helping structure their reports
+
+When the user wants to add a block, respond with a JSON action in this format:
+{
+  "action": "create_block",
+  "block": {
+    "kind": "table|chart|metric|text",
+    "title": "Block title",
+    "config": { ... config based on kind ... }
+  },
+  "explanation": "Why this block is useful"
+}
+
+For table blocks, config should have: database, table, columns (array), filters (array), orderBy, rowLimit
+For chart blocks, config should have: database, table, chartType, xColumn, yColumn, aggregateFunction, groupBy, filters, rowLimit
+For metric blocks, config should have: database, table, column, aggregateFunction, filters, label, format
+
+If you're just providing information or need clarification, respond with plain text.
+Always be helpful and explain your suggestions in simple terms.`;
+
+      const response = await client.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...messages.slice(-10).map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
+        ],
+        max_completion_tokens: 1000,
+        temperature: 0.7,
+      });
+
+      const assistantMessage = response.choices[0]?.message?.content || "I'm sorry, I couldn't process that request.";
+
+      messages.push({
+        role: "assistant",
+        content: assistantMessage,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Update session
+      await db
+        .update(reportChatSessions)
+        .set({ messages, updatedAt: new Date() })
+        .where(eq(reportChatSessions.id, session.id));
+
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "REPORT_AI_CHAT",
+        details: `AI chat in report: ${page.title}`,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      // Try to parse action from response
+      let action = null;
+      let validatedAction = null;
+      try {
+        const jsonMatch = assistantMessage.match(/\{[\s\S]*"action"[\s\S]*\}/);
+        if (jsonMatch) {
+          action = JSON.parse(jsonMatch[0]);
+          
+          // Security: Validate AI-generated action before returning it
+          if (action?.action === "create_block" && action?.block) {
+            const block = action.block;
+            const validKinds = ["table", "chart", "metric", "text"];
+            
+            if (validKinds.includes(block.kind)) {
+              // Ensure default values are set
+              const config = {
+                ...block.config,
+                database: block.config?.database || "Default",
+                rowLimit: Math.min(block.config?.rowLimit || 500, 10000),
+                filters: block.config?.filters || [],
+              };
+              
+              // Validate the config against database metadata and user permissions
+              const validation = await validateBlockConfig(config, block.kind, user);
+              
+              if (validation.valid) {
+                validatedAction = {
+                  action: "create_block",
+                  block: {
+                    kind: block.kind,
+                    title: block.title || `${block.kind} block`,
+                    config,
+                  },
+                  explanation: action.explanation || "",
+                };
+              } else {
+                // AI suggested an invalid action - log and return null action
+                console.log(`[SECURITY] AI suggested invalid block config: ${validation.error}`);
+                validatedAction = null;
+              }
+            }
+          }
+        }
+      } catch {
+        // Not a JSON response, that's fine
+      }
+
+      res.json({
+        message: assistantMessage,
+        action: validatedAction,
+      });
+    } catch (err) {
+      console.error("Error in AI chat:", err);
+      res.status(500).json({ error: "Failed to process AI request" });
+    }
+  });
+
+  // Get available report templates
+  app.get("/api/reports/templates", isAuthenticated, async (req, res) => {
+    const templates = [
+      {
+        id: "booking-summary",
+        name: "Booking Summary",
+        description: "Overview of bookings with status breakdown",
+        blocks: [
+          { kind: "metric", title: "Total Bookings", config: { table: "bookings", column: "id", aggregateFunction: "count" } },
+          { kind: "chart", title: "Bookings by Status", config: { table: "bookings", chartType: "pie", xColumn: "status", yColumn: "id", aggregateFunction: "count", groupBy: "status" } },
+        ],
+      },
+      {
+        id: "customer-metrics",
+        name: "Customer Metrics",
+        description: "Key customer statistics and trends",
+        blocks: [
+          { kind: "metric", title: "Total Customers", config: { table: "users", column: "id", aggregateFunction: "count" } },
+          { kind: "table", title: "Recent Customers", config: { table: "users", columns: ["email", "first_name", "created_at"], orderBy: { column: "created_at", direction: "desc" }, rowLimit: 10 } },
+        ],
+      },
+    ];
+
+    res.json(templates);
   });
 
   return httpServer;

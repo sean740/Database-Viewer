@@ -91,6 +91,10 @@ export const nlqPlanSchema = z.object({
     op: filterOperatorSchema,
     value: z.string(),
   })),
+  needsClarification: z.boolean().optional(),
+  clarificationQuestion: z.string().optional(),
+  ambiguousColumns: z.array(z.string()).optional(),
+  summary: z.string().optional(),
 });
 
 export type NLQPlan = z.infer<typeof nlqPlanSchema>;

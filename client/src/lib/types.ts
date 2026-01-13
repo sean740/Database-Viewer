@@ -49,6 +49,10 @@ export interface NLQPlan {
     op: FilterOperator;
     value: string;
   }>;
+  needsClarification?: boolean;
+  clarificationQuestion?: string;
+  ambiguousColumns?: string[];
+  summary?: string;
 }
 
 export const OPERATOR_LABELS: Record<FilterOperator, string> = {

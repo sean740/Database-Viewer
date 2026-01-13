@@ -808,7 +808,7 @@ export async function registerRoutes(
   // Natural Language Query
   app.post("/api/nlq", isAuthenticated, async (req: Request, res: Response) => {
     try {
-      const { database, query, table: currentTable } = req.body;
+      const { database, query, table: currentTable, context } = req.body;
 
       const client = getOpenAIClient();
       if (!client) {
@@ -818,79 +818,97 @@ export async function registerRoutes(
       if (!query || typeof query !== "string") {
         return res.status(400).json({ error: "Query is required" });
       }
+
+      if (!currentTable) {
+        return res.status(400).json({ error: "Please select a table first" });
+      }
       
-      // Check table access for external customers (if a table is specified)
+      // Check table access for external customers
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      if (user?.role === "external_customer" && currentTable) {
+      if (user?.role === "external_customer") {
         const allowedTables = await getAllowedTables(userId);
         if (!allowedTables.includes(`${database}:${currentTable}`)) {
           return res.status(403).json({ error: "You don't have access to this table" });
         }
       }
 
-      // Get available tables if we need to discover them
-      let availableTables: string[] = [];
-      let availableColumns: string[] = [];
-
-      if (database) {
-        const pool = getPool(database);
-        const tablesResult = await pool.query(`
-          SELECT table_schema || '.' || table_name as full_name
-          FROM information_schema.tables
-          WHERE table_type = 'BASE TABLE'
-            AND table_schema NOT IN ('pg_catalog', 'information_schema')
-        `);
-        availableTables = tablesResult.rows.map((r) => r.full_name);
-        
-        // For external customers, filter to only granted tables
-        if (user?.role === "external_customer") {
-          const allowedTables = await getAllowedTables(userId);
-          availableTables = availableTables.filter(t => allowedTables.includes(`${database}:${t}`));
-          
-          // If no tables are allowed, return early
-          if (availableTables.length === 0) {
-            return res.status(403).json({ error: "No tables available. Contact an admin for access." });
-          }
-        }
-
-        // If a table is selected, get its columns
-        if (currentTable) {
-          const [schema, tableName] = currentTable.split(".");
-          const columnsResult = await pool.query(
-            `
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = $1 AND table_name = $2
-          `,
-            [schema, tableName]
-          );
-          availableColumns = columnsResult.rows.map((r) => r.column_name);
-        }
+      // Get column information with data types for schema-aware prompts
+      interface ColumnWithType {
+        name: string;
+        dataType: string;
       }
+      let columnsWithTypes: ColumnWithType[] = [];
+
+      if (database && currentTable) {
+        const pool = getPool(database);
+        const [schema, tableName] = currentTable.split(".");
+        const columnsResult = await pool.query(
+          `
+          SELECT column_name, data_type
+          FROM information_schema.columns
+          WHERE table_schema = $1 AND table_name = $2
+          ORDER BY ordinal_position
+          `,
+          [schema, tableName]
+        );
+        columnsWithTypes = columnsResult.rows.map((r) => ({
+          name: r.column_name,
+          dataType: r.data_type,
+        }));
+      }
+
+      // Format columns for the prompt with data types
+      const columnInfo = columnsWithTypes
+        .map((c) => `  - ${c.name} (${c.dataType})`)
+        .join("\n");
+
+      // Find date/timestamp columns for potential ambiguity detection
+      const dateColumns = columnsWithTypes
+        .filter((c) => c.dataType.includes("date") || c.dataType.includes("timestamp"))
+        .map((c) => c.name);
 
       const systemPrompt = `You are a helpful assistant that converts natural language queries into structured query plans for a database viewer.
 
-The user wants to query a PostgreSQL database. You must return ONLY a valid JSON object with this structure:
+The user is querying the table: ${currentTable}
+
+Available columns (with data types):
+${columnInfo}
+
+You must return ONLY a valid JSON object with this structure:
 {
-  "table": "schema.table_name",
+  "table": "${currentTable}",
   "page": 1,
   "filters": [
     {"column": "column_name", "op": "operator", "value": "filter_value"}
-  ]
+  ],
+  "needsClarification": false,
+  "clarificationQuestion": null,
+  "ambiguousColumns": [],
+  "summary": "A brief description of what this filter does"
 }
 
-Valid operators are: eq (equals), contains (substring match), gt (greater than), gte (greater than or equal), lt (less than), lte (less than or equal).
+Valid operators are:
+- eq: equals (exact match)
+- contains: substring match (case-insensitive)
+- gt: greater than
+- gte: greater than or equal
+- lt: less than
+- lte: less than or equal
 
-${currentTable ? `The user is currently viewing table: ${currentTable}. Use this table unless they specify a different one.` : ""}
-${availableTables.length > 0 ? `Available tables: ${availableTables.join(", ")}` : ""}
-${availableColumns.length > 0 ? `Available columns for ${currentTable}: ${availableColumns.join(", ")}` : ""}
+IMPORTANT RULES:
+1. Always use the table "${currentTable}" - do not change it
+2. Only use columns that exist in the column list above
+3. For date queries (years, months, dates):
+   - If there are multiple date columns (${dateColumns.join(", ")}), ask which one to use
+   - Set "needsClarification": true and provide a "clarificationQuestion"
+   - List the ambiguous columns in "ambiguousColumns"
+4. For year filtering, use gte/lte with date ranges (e.g., >= '2026-01-01' AND < '2027-01-01')
+5. Always provide a "summary" field describing what the filter will do
+6. If the query is unclear or you need more information, set "needsClarification": true
+7. Only return valid JSON, no explanation or markdown
 
-IMPORTANT:
-- Only return valid JSON, no explanation or markdown
-- Always use page 1 unless the user asks for a specific page
-- The "contains" operator is case-insensitive
-- If the query doesn't make sense, return {"table": "${currentTable || "public.unknown"}", "page": 1, "filters": []}`;
+${context ? `Previous context from conversation:\n${context}\n` : ""}`;
 
       const response = await client.chat.completions.create({
         model: "gpt-4o",
@@ -898,7 +916,7 @@ IMPORTANT:
           { role: "system", content: systemPrompt },
           { role: "user", content: query },
         ],
-        max_completion_tokens: 500,
+        max_completion_tokens: 800,
         temperature: 0.1,
       });
 
@@ -907,30 +925,27 @@ IMPORTANT:
       // Parse the response
       let plan: NLQPlan;
       try {
-        plan = JSON.parse(content);
+        // Clean up potential markdown code blocks
+        const cleanContent = content.replace(/```json\n?|\n?```/g, "").trim();
+        plan = JSON.parse(cleanContent);
       } catch {
         return res.status(400).json({ error: "Failed to parse AI response" });
       }
 
-      // Validate the plan
-      if (!plan.table || typeof plan.table !== "string") {
-        plan.table = currentTable || "public.unknown";
-      }
-
-      // Validate table exists
-      if (availableTables.length > 0 && !availableTables.includes(plan.table)) {
-        return res.status(400).json({ error: `Table not found: ${plan.table}` });
-      }
+      // Force the table to be the currently selected table
+      plan.table = currentTable;
 
       // Validate filters
       const validOperators = ["eq", "contains", "gt", "gte", "lt", "lte"];
+      const validColumns = columnsWithTypes.map((c) => c.name);
+      
       if (plan.filters && Array.isArray(plan.filters)) {
         for (const filter of plan.filters) {
           if (!validOperators.includes(filter.op)) {
             return res.status(400).json({ error: `Invalid operator: ${filter.op}` });
           }
-          if (availableColumns.length > 0 && !availableColumns.includes(filter.column)) {
-            return res.status(400).json({ error: `Invalid column: ${filter.column}` });
+          if (validColumns.length > 0 && !validColumns.includes(filter.column)) {
+            return res.status(400).json({ error: `Invalid column: ${filter.column}. Available columns: ${validColumns.join(", ")}` });
           }
         }
       } else {

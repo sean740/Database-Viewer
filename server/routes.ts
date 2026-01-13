@@ -293,6 +293,59 @@ async function validateTableAccess(
   }
 }
 
+// Levenshtein distance for column name similarity
+function levenshteinDistance(a: string, b: string): number {
+  const matrix: number[][] = [];
+  const aLower = a.toLowerCase();
+  const bLower = b.toLowerCase();
+  
+  for (let i = 0; i <= bLower.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= aLower.length; j++) {
+    matrix[0][j] = j;
+  }
+  
+  for (let i = 1; i <= bLower.length; i++) {
+    for (let j = 1; j <= aLower.length; j++) {
+      if (bLower.charAt(i - 1) === aLower.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[bLower.length][aLower.length];
+}
+
+// Find similar column names based on Levenshtein distance
+function findSimilarColumns(target: string, columns: string[], maxSuggestions: number = 3): string[] {
+  // Normalize target: remove underscores and lowercase for comparison
+  const normalizedTarget = target.toLowerCase().replace(/_/g, "");
+  
+  const scored = columns.map(col => {
+    const normalizedCol = col.toLowerCase().replace(/_/g, "");
+    // Calculate distance on normalized versions
+    const distance = levenshteinDistance(normalizedTarget, normalizedCol);
+    // Calculate similarity score (0 to 1, higher is more similar)
+    const maxLen = Math.max(normalizedTarget.length, normalizedCol.length);
+    const similarity = maxLen > 0 ? 1 - (distance / maxLen) : 0;
+    return { col, similarity, distance };
+  });
+  
+  // Filter to reasonable matches (similarity > 0.4 means roughly 60% different at most)
+  // and sort by similarity descending
+  return scored
+    .filter(s => s.similarity > 0.4)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, maxSuggestions)
+    .map(s => s.col);
+}
+
 // Security: Validate columns exist in table
 async function validateColumns(
   dbName: string, 
@@ -321,11 +374,16 @@ async function validateColumns(
       WHERE table_schema = $1 AND table_name = $2
     `, [parsed.schema, parsed.table]);
     
-    const existingColumns = new Set(columnResult.rows.map((r: any) => r.column_name));
+    const existingColumnsArray = columnResult.rows.map((r: any) => r.column_name);
+    const existingColumns = new Set(existingColumnsArray);
     
     for (const col of columns) {
       if (!existingColumns.has(col)) {
-        return { valid: false, error: `Column not found: ${col}` };
+        const suggestions = findSimilarColumns(col, existingColumnsArray);
+        const suggestionText = suggestions.length > 0 
+          ? ` Did you mean: ${suggestions.map(s => `'${s}'`).join(", ")}?`
+          : "";
+        return { valid: false, error: `Column not found: ${col}.${suggestionText}` };
       }
     }
 
@@ -503,7 +561,11 @@ async function validateBlockConfig(
   if (joinColumnsToValidate.length > 0 && joinTableColumns.length > 0) {
     for (const col of joinColumnsToValidate) {
       if (!joinTableColumns.includes(col)) {
-        return { valid: false, error: `Column not found in joined table: ${col}` };
+        const suggestions = findSimilarColumns(col, joinTableColumns);
+        const suggestionText = suggestions.length > 0 
+          ? ` Did you mean: ${suggestions.map(s => `'${s}'`).join(", ")}?`
+          : "";
+        return { valid: false, error: `Column not found in joined table: ${col}.${suggestionText}` };
       }
     }
   }

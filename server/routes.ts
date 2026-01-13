@@ -2679,6 +2679,12 @@ When the user wants to add a block, respond with a JSON action in this format:
 }
 
 For table blocks, config should have: database, table, columns (array of exact column names from above), filters (array), orderBy, rowLimit
+For table blocks with JOINS (to pull data from related tables):
+- Add a "join" object with: table (the related table like "public.vendors"), on (array of two column names [fromColumn, toColumn] like ["vendor_id", "id"])
+- For columns from the joined table, prefix with table alias like "joined.email" or "joined.name"
+- Example join config: { "table": "public.vendors", "on": ["vendor_id", "id"] }
+- The joined table columns will be available as "joined.column_name" in the columns array
+
 For chart blocks, config should have: database, table, chartType, xColumn (the date/timestamp column to group by), yColumn (the column to aggregate), aggregateFunction, groupBy (can be a column name OR one of: "month", "year", "day", "week", "quarter" for date-based grouping), filters, rowLimit
 For metric blocks, config should have: database, table, column, aggregateFunction, filters, label, format
 

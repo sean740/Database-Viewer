@@ -1,0 +1,99 @@
+Update my existing “Heroku Postgres Database Viewer” project to visually match the WashOS website style (Example 1) using ONLY minor design changes. 
+
+NON-NEGOTIABLE CONSTRAINTS:
+- Do NOT change layout, DOM structure, element order, sizing logic, or functionality.
+- Do NOT modify server.js or backend behavior/routes.
+- Do NOT rename or remove any existing IDs used by JavaScript.
+- Allowed changes ONLY: add/update CSS, add CSS variables, add class attributes to existing elements, and add a font import.
+- If there is no CSS file currently, create one (public/styles.css) and link it from index.html.
+- Light mode only. Do NOT add dark mode logic.
+- Use close approximations for WashOS colors (no need to perfectly match).
+
+STEP 0 — Inspect project structure
+- Check whether styling currently exists in:
+  a) <style> inside public/index.html
+  b) an existing CSS file in /public (e.g., styles.css, style.css, main.css)
+- Choose the minimal-impact approach:
+  - If styles are in <style>, keep them but refactor to use CSS variables and WashOS tokens.
+  - If a CSS file exists, update it; otherwise create public/styles.css and link it.
+
+STEP 1 — Add WashOS-like theme tokens (global)
+Add these CSS variables in the main stylesheet:
+
+:root{
+  --bg: #F4F7FE;              /* cool off-white / light blue gray */
+  --surface: #FFFFFF;         /* cards/panels */
+  --text: #0B182B;            /* deep navy text */
+  --muted: #647D9C;           /* secondary text */
+  --border: rgba(11,24,43,0.14);
+  --navy: #0B182B;            /* primary button/navy */
+  --accent: #C9F45D;          /* lime accent */
+
+  --radius-card: 18px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 4px 14px rgba(11,24,43,0.08);
+  --shadow-md: 0 10px 30px rgba(11,24,43,0.10);
+}
+
+Apply base styling without changing layout:
+- body background: var(--bg)
+- base font: Inter (or closest), then system fallback
+- default text color: var(--text)
+
+STEP 2 — Add Inter font (minimal change)
+- Add Inter via Google Fonts.
+- Preferred: add <link> tags in the <head> of public/index.html (allowed).
+- If you cannot safely modify head, use @import in CSS.
+
+STEP 3 — Component reskin (NO layout changes)
+Reskin existing elements by targeting current selectors (IDs/classes/elements) without restructuring HTML.
+
+Buttons (all existing buttons):
+- Primary look: navy pill button with white text
+  background: var(--navy)
+  color: #fff
+  border-radius: var(--radius-pill)
+  box-shadow: var(--shadow-sm)
+  border: 1px solid rgba(11,24,43,0.08)
+  hover: slightly darker or reduce brightness subtly
+- Secondary buttons (if any): white surface with navy border OR accent outline
+  background: transparent or white
+  color: var(--navy)
+  border: 1px solid var(--border)
+  hover: subtle background tint
+
+Inputs + selects:
+- white background, pill radius, subtle border
+- focus: accent ring (outline or box-shadow) using --accent
+- do NOT change widths or layout
+
+Panels/sections/cards (main containers):
+- white surface, subtle border, rounded corners, soft shadow
+- apply to existing panels such as filter panel, admin settings panel, query area, results container
+- keep padding changes small (only +4 to +10px max) to avoid layout shifts
+
+Tables:
+- keep the same table and pagination behavior
+- style improvements only:
+  - header row: slightly tinted background (very light)
+  - row borders: use --border
+  - row hover: subtle highlight (very light tint)
+  - consistent font size and spacing
+
+Typography:
+- Make page title/heading bolder (700–800) and slightly larger (minor change)
+- Labels/help text use --muted
+- Ensure consistent line-height
+
+STEP 4 — Do not break JS bindings
+- If JS references element IDs, do not rename them.
+- If you need to add classes for styling, add them IN ADDITION to existing attributes.
+- Do not wrap elements in new containers.
+
+STEP 5 — Deliverables
+- Implement the reskin and list exactly which files changed.
+- Confirm server.js unchanged.
+- Provide a short checklist of visual changes applied.
+
+Now implement this reskin.

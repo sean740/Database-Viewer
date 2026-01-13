@@ -533,8 +533,8 @@ export async function registerRoutes(
     }
   );
 
-  // Get filter definitions for a table
-  app.get("/api/filters/:table", async (req: Request, res: Response) => {
+  // Get filter definitions for a table (authenticated users only)
+  app.get("/api/filters/:table", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const { table } = req.params;
       const filters = await storage.getFilters(table);
@@ -545,8 +545,8 @@ export async function registerRoutes(
     }
   });
 
-  // Save filter definitions for a table
-  app.post("/api/filters", async (req: Request, res: Response) => {
+  // Save filter definitions for a table (admin only)
+  app.post("/api/filters", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
     try {
       const { table, filters } = req.body;
       if (!table || !Array.isArray(filters)) {

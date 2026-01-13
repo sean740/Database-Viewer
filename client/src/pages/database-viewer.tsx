@@ -23,9 +23,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { AlertTriangle, ShieldAlert, FileText } from "lucide-react";
-import { Link } from "wouter";
-import { Button } from "@/components/ui/button";
+import { AlertTriangle, ShieldAlert } from "lucide-react";
 
 import type {
   DatabaseConnection,
@@ -452,15 +450,6 @@ export default function DatabaseViewer() {
           )}
 
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden p-6 gap-4">
-            <div className="shrink-0">
-              <Link href="/my-reports">
-                <Button variant="outline" className="gap-2" data-testid="link-my-reports">
-                  <FileText className="h-4 w-4" />
-                  My Reports
-                </Button>
-              </Link>
-            </div>
-
             <div className="shrink-0">
               {nlqEnabled && selectedDatabase && (
                 <NLQPanel

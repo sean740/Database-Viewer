@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Search, Table2, Loader2, EyeOff } from "lucide-react";
+import { Search, Table2, Loader2, EyeOff, FileText } from "lucide-react";
+import { Link } from "wouter";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { TableInfo } from "@/lib/types";
 import { useAuth } from "@/hooks/use-auth";
@@ -34,7 +36,13 @@ export function TableSidebar({
 
   return (
     <aside className="w-64 border-r bg-sidebar flex flex-col h-full">
-      <div className="p-4 border-b border-sidebar-border">
+      <div className="p-4 border-b border-sidebar-border space-y-3">
+        <Link href="/my-reports">
+          <Button variant="outline" className="w-full gap-2" data-testid="link-my-reports">
+            <FileText className="h-4 w-4" />
+            My Reports
+          </Button>
+        </Link>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input

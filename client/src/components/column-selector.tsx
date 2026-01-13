@@ -17,6 +17,7 @@ interface ColumnSelectorProps {
   columns: ColumnInfo[];
   hiddenColumns: string[];
   onSave: (hiddenColumns: string[]) => void;
+  onLocalChange?: (hiddenColumns: string[]) => void;
   isSaving?: boolean;
   disabled?: boolean;
 }
@@ -25,6 +26,7 @@ export function ColumnSelector({
   columns,
   hiddenColumns,
   onSave,
+  onLocalChange,
   isSaving = false,
   disabled = false,
 }: ColumnSelectorProps) {
@@ -37,10 +39,6 @@ export function ColumnSelector({
   useEffect(() => {
     setLocalHidden(new Set(hiddenColumns));
   }, [hiddenColumns]);
-
-  if (!isAdmin) {
-    return null;
-  }
 
   const filteredColumns = columns.filter((col) =>
     col.name.toLowerCase().includes(search.toLowerCase())
@@ -56,18 +54,36 @@ export function ColumnSelector({
       newHidden.add(columnName);
     }
     setLocalHidden(newHidden);
+    
+    if (!isAdmin && onLocalChange) {
+      onLocalChange(Array.from(newHidden));
+    }
   };
 
   const handleSelectAll = () => {
     setLocalHidden(new Set());
+    if (!isAdmin && onLocalChange) {
+      onLocalChange([]);
+    }
   };
 
   const handleSelectNone = () => {
-    setLocalHidden(new Set(columns.map((c) => c.name)));
+    const allHidden = new Set(columns.map((c) => c.name));
+    setLocalHidden(allHidden);
+    if (!isAdmin && onLocalChange) {
+      onLocalChange(Array.from(allHidden));
+    }
   };
 
   const handleSave = () => {
     onSave(Array.from(localHidden));
+    setIsOpen(false);
+  };
+
+  const handleApply = () => {
+    if (onLocalChange) {
+      onLocalChange(Array.from(localHidden));
+    }
     setIsOpen(false);
   };
 
@@ -156,28 +172,60 @@ export function ColumnSelector({
           </div>
         </ScrollArea>
 
-        <div className="p-3 border-t flex justify-end gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setIsOpen(false)}
-            data-testid="button-cancel-columns"
-          >
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            onClick={handleSave}
-            disabled={!hasChanges || isSaving}
-            data-testid="button-save-columns"
-          >
-            {isSaving ? (
-              <Loader2 className="h-4 w-4 animate-spin mr-1" />
-            ) : (
-              <Check className="h-4 w-4 mr-1" />
-            )}
-            Save
-          </Button>
+        <div className="p-3 border-t">
+          {isAdmin ? (
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsOpen(false)}
+                data-testid="button-cancel-columns"
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSave}
+                disabled={!hasChanges || isSaving}
+                data-testid="button-save-columns"
+              >
+                {isSaving ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                ) : (
+                  <Check className="h-4 w-4 mr-1" />
+                )}
+                Save for All
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs text-muted-foreground">
+                Changes apply to your current view only
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setLocalHidden(new Set(hiddenColumns));
+                    setIsOpen(false);
+                  }}
+                  data-testid="button-cancel-columns"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleApply}
+                  disabled={!hasChanges}
+                  data-testid="button-apply-columns"
+                >
+                  <Check className="h-4 w-4 mr-1" />
+                  Apply
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </PopoverContent>
     </Popover>

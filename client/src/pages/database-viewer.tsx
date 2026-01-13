@@ -47,6 +47,7 @@ export default function DatabaseViewer() {
   const [isExporting, setIsExporting] = useState(false);
   const [lastNLQPlan, setLastNLQPlan] = useState<NLQPlan | null>(null);
   const [nlqEnabled, setNlqEnabled] = useState(false);
+  const [localHiddenColumns, setLocalHiddenColumns] = useState<string[]>([]);
 
   // Fetch databases
   const { data: databases = [], isLoading: isLoadingDatabases } = useQuery<DatabaseConnection[]>({
@@ -87,16 +88,27 @@ export default function DatabaseViewer() {
     queryKey: ["/api/table-settings"],
   });
 
-  // Get hidden columns for current table
+  // Get hidden columns for current table (admin settings)
   const settingsKey = selectedDatabase && selectedTable ? `${selectedDatabase}:${selectedTable}` : "";
   const currentTableSettings = tableSettings[settingsKey];
-  const hiddenColumns = currentTableSettings?.hiddenColumns || [];
+  const adminHiddenColumns = currentTableSettings?.hiddenColumns || [];
+
+  // Combined hidden columns: admin settings + local user preferences
+  const effectiveHiddenColumns = useMemo(() => {
+    const combined = new Set([...adminHiddenColumns, ...localHiddenColumns]);
+    return Array.from(combined);
+  }, [adminHiddenColumns, localHiddenColumns]);
 
   // Filter columns to only show visible ones
   const visibleColumns = useMemo(() => {
-    if (hiddenColumns.length === 0) return columns;
-    return columns.filter((col) => !hiddenColumns.includes(col.name));
-  }, [columns, hiddenColumns]);
+    if (effectiveHiddenColumns.length === 0) return columns;
+    return columns.filter((col) => !effectiveHiddenColumns.includes(col.name));
+  }, [columns, effectiveHiddenColumns]);
+
+  // Reset local hidden columns when table changes
+  useEffect(() => {
+    setLocalHiddenColumns([]);
+  }, [selectedTable]);
 
   // Mutation to save column visibility
   const saveColumnsMutation = useMutation({
@@ -340,8 +352,9 @@ export default function DatabaseViewer() {
               isLoading={isLoadingRows}
               isExporting={isExporting}
               columns={columns}
-              hiddenColumns={hiddenColumns}
+              hiddenColumns={effectiveHiddenColumns}
               onSaveColumns={handleSaveColumns}
+              onLocalColumnsChange={setLocalHiddenColumns}
               isSavingColumns={saveColumnsMutation.isPending}
             />
           )}

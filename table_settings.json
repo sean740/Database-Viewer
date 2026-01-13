@@ -30,11 +30,7 @@
   "Default:public.areas": {
     "isVisible": true,
     "displayName": "Areas",
-    "hiddenColumns": [
-      "created_at",
-      "updated_at",
-      "district_id"
-    ]
+    "hiddenColumns": []
   },
   "Default:public.areas_pack_variants": {
     "isVisible": false,

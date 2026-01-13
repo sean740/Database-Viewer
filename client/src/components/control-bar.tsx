@@ -16,6 +16,7 @@ interface ControlBarProps {
   columns: ColumnInfo[];
   hiddenColumns: string[];
   onSaveColumns: (hiddenColumns: string[]) => void;
+  onLocalColumnsChange?: (hiddenColumns: string[]) => void;
   isSavingColumns?: boolean;
 }
 
@@ -32,6 +33,7 @@ export function ControlBar({
   columns,
   hiddenColumns,
   onSaveColumns,
+  onLocalColumnsChange,
   isSavingColumns = false,
 }: ControlBarProps) {
   return (
@@ -52,6 +54,7 @@ export function ControlBar({
           columns={columns}
           hiddenColumns={hiddenColumns}
           onSave={onSaveColumns}
+          onLocalChange={onLocalColumnsChange}
           isSaving={isSavingColumns}
           disabled={!selectedTable}
         />

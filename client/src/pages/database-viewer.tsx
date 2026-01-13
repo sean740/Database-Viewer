@@ -57,7 +57,6 @@ export default function DatabaseViewer() {
   const [error, setError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [lastNLQPlan, setLastNLQPlan] = useState<NLQPlan | null>(null);
-  const [nlqEnabled, setNlqEnabled] = useState(false);
   const [localHiddenColumns, setLocalHiddenColumns] = useState<string[]>([]);
   
   // Export dialog states
@@ -72,15 +71,10 @@ export default function DatabaseViewer() {
   });
 
   // Fetch NLQ status
-  useQuery({
+  const { data: nlqStatus } = useQuery<{ enabled: boolean }>({
     queryKey: ["/api/nlq/status"],
-    queryFn: async () => {
-      const res = await fetch("/api/nlq/status");
-      const data = await res.json();
-      setNlqEnabled(data.enabled);
-      return data;
-    },
   });
+  const nlqEnabled = nlqStatus?.enabled ?? false;
 
   // Fetch tables when database changes
   const { data: tables = [], isLoading: isLoadingTables } = useQuery<TableInfo[]>({

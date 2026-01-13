@@ -99,15 +99,15 @@ export function DataTable({ columns, rows, isLoading }: DataTableProps) {
     <div className="border rounded-lg bg-card">
       <div 
         ref={topScrollRef}
-        className="overflow-x-scroll overflow-y-hidden"
-        style={{ height: "16px" }}
+        className="overflow-x-scroll overflow-y-hidden scrollbar-always-visible"
+        style={{ height: "14px" }}
         onScroll={handleTopScroll}
       >
-        <div style={{ width: scrollWidth, height: "16px" }} />
+        <div style={{ width: scrollWidth, height: "1px" }} />
       </div>
       <div 
         ref={tableContainerRef} 
-        className="overflow-x-auto"
+        className="overflow-x-auto scrollbar-always-visible"
         onScroll={handleTableScroll}
       >
         <Table className="min-w-max">

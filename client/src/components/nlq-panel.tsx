@@ -22,6 +22,8 @@ interface NLQPanelProps {
   selectedTable: string;
   onQueryParsed: (plan: NLQPlan) => void;
   lastPlan: NLQPlan | null;
+  resultCount?: number;
+  isLoadingResults?: boolean;
 }
 
 export function NLQPanel({
@@ -30,11 +32,14 @@ export function NLQPanel({
   selectedTable,
   onQueryParsed,
   lastPlan,
+  resultCount,
+  isLoadingResults,
 }: NLQPanelProps) {
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [context, setContext] = useState("");
+  const [hasCheckedNoResults, setHasCheckedNoResults] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -47,11 +52,89 @@ export function NLQPanel({
   useEffect(() => {
     setMessages([]);
     setContext("");
+    setHasCheckedNoResults(false);
   }, [selectedTable]);
+
+  const lastPlanRef = useRef<NLQPlan | null>(null);
+
+  useEffect(() => {
+    if (lastPlan !== lastPlanRef.current) {
+      lastPlanRef.current = lastPlan;
+      setHasCheckedNoResults(false);
+    }
+  }, [lastPlan]);
+
+  useEffect(() => {
+    if (
+      !isLoadingResults &&
+      resultCount === 0 &&
+      lastPlan &&
+      lastPlan.filters.length > 0 &&
+      !hasCheckedNoResults &&
+      messages.length > 0
+    ) {
+      setHasCheckedNoResults(true);
+      handleNoResultsFollowUp();
+    }
+  }, [resultCount, isLoadingResults, lastPlan, hasCheckedNoResults, messages.length]);
 
   if (!isEnabled) {
     return null;
   }
+
+  const handleNoResultsFollowUp = async () => {
+    if (!selectedDatabase || !selectedTable || !lastPlan) return;
+
+    setIsLoading(true);
+
+    const filterDesc = lastPlan.filters
+      .map((f) => `${f.column} ${OPERATOR_LABELS[f.op]} "${f.value}"`)
+      .join(" AND ");
+
+    const followUpQuery = `The previous query returned no results. The filters applied were: ${filterDesc}. This might indicate the filter values don't match any data. Please suggest alternative filter values or ask a clarifying question to help the user find the data they're looking for.`;
+
+    try {
+      const response = await fetch("/api/nlq", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          database: selectedDatabase,
+          query: followUpQuery,
+          table: selectedTable,
+          context: context,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Failed to process query");
+      }
+
+      const plan: NLQPlan = await response.json();
+
+      const noResultsMessage: Message = {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: plan.clarificationQuestion || plan.summary || "No results found. Try adjusting your search criteria or using different values.",
+        plan: plan.needsClarification ? plan : undefined,
+      };
+
+      setMessages((prev) => [...prev, noResultsMessage]);
+      setContext((prev) =>
+        prev + `\nNo results were found for the previous query. Assistant suggested: ${noResultsMessage.content}`
+      );
+    } catch (err) {
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: "No results found for your query. Try using different filter values or broadening your search.",
+        isError: false,
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleAsk = async () => {
     if (!query.trim() || !selectedDatabase || !selectedTable) return;

@@ -367,6 +367,8 @@ export default function DatabaseViewer() {
                 selectedTable={selectedTable}
                 onQueryParsed={handleNLQParsed}
                 lastPlan={lastNLQPlan}
+                resultCount={queryResult?.totalCount}
+                isLoadingResults={isLoadingRows}
               />
             )}
 

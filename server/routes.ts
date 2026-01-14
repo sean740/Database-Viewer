@@ -2877,14 +2877,16 @@ For table blocks with JOINS (to pull data from related tables):
 For chart blocks, config should have: database, table, chartType, xColumn (the date/timestamp column to group by), yColumn (the column to aggregate), aggregateFunction, groupBy (can be a column name OR one of: "month", "year", "day", "week", "quarter" for date-based grouping), filters, rowLimit
 For metric blocks, config should have: database, table, column, aggregateFunction, filters, label, format
 
-FILTER OPERATORS: Use these exact operator values in filters:
-- "eq" for equals (NOT "=" or "==")
-- "contains" for text contains
+FILTER OPERATORS - ONLY USE THESE EXACT VALUES (no others allowed):
+- "eq" for equals (use this for exact matches, NOT "=" or "==" or "in")
+- "contains" for text contains/partial match
 - "gt" for greater than
 - "gte" for greater than or equal
 - "lt" for less than
 - "lte" for less than or equal
 - "between" for date ranges (value must be array of two dates like ["2025-01-01", "2025-12-31"])
+
+IMPORTANT: Do NOT use "in", "like", "!=", or any other operators. For matching one of multiple values, use multiple filters with "eq" operator or use "contains" for partial matching.
 
 CRITICAL: Only use column names that are listed above. For date-based grouping, use groupBy: "month" (or year/day/week/quarter) with xColumn set to the date column like "created_at".
 

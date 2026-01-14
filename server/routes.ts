@@ -1691,13 +1691,19 @@ export async function registerRoutes(
         .filter((c) => c.dataType.includes("date") || c.dataType.includes("timestamp"))
         .map((c) => c.name);
 
-      // Get current date for relative date calculations
+      // Get current date for relative date calculations (in Pacific Time)
       const today = new Date();
-      const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+      const pacificFormatter = new Intl.DateTimeFormat('en-CA', { 
+        timeZone: 'America/Los_Angeles', 
+        year: 'numeric', 
+        month: '2-digit', 
+        day: '2-digit' 
+      });
+      const todayStr = pacificFormatter.format(today); // YYYY-MM-DD format in PST/PDT
       
       const systemPrompt = `You are a helpful assistant that converts natural language queries into structured query plans for a database viewer.
 
-IMPORTANT: Today's date is ${todayStr}. Use this for any relative date references like "yesterday", "last week", "this month", etc.
+IMPORTANT: Today's date is ${todayStr} (Pacific Time - PST/PDT). Use this for any relative date references like "yesterday", "last week", "this month", etc. All date/time queries should be interpreted in Pacific Time.
 
 The user is querying the table: ${currentTable}
 
@@ -1949,13 +1955,19 @@ ${context ? `Previous context from conversation:\n${context}\n` : ""}`;
         });
       }
 
-      // Get current date for relative date references
+      // Get current date for relative date references (in Pacific Time)
       const today = new Date();
-      const todayStr = today.toISOString().split('T')[0];
+      const pacificFormatter = new Intl.DateTimeFormat('en-CA', { 
+        timeZone: 'America/Los_Angeles', 
+        year: 'numeric', 
+        month: '2-digit', 
+        day: '2-digit' 
+      });
+      const todayStr = pacificFormatter.format(today); // YYYY-MM-DD format in PST/PDT
       
       const systemPrompt = `You are a helpful assistant that helps users find data in a database when their query returns no results.
 
-IMPORTANT: Today's date is ${todayStr}. Use this for any relative date references.
+IMPORTANT: Today's date is ${todayStr} (Pacific Time - PST/PDT). Use this for any relative date references. All date/time queries should be interpreted in Pacific Time.
 
 The user's query returned 0 results. Here's what we found about their filters:
 ${samplingInfo}
@@ -2811,13 +2823,19 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
         timestamp: new Date().toISOString(),
       });
 
-      // Get current date for relative date references
+      // Get current date for relative date references (in Pacific Time)
       const today = new Date();
-      const todayStr = today.toISOString().split('T')[0];
+      const pacificFormatter = new Intl.DateTimeFormat('en-CA', { 
+        timeZone: 'America/Los_Angeles', 
+        year: 'numeric', 
+        month: '2-digit', 
+        day: '2-digit' 
+      });
+      const todayStr = pacificFormatter.format(today); // YYYY-MM-DD format in PST/PDT
       
       const systemPrompt = `You are a helpful report building assistant. You help users create custom reports with tables, charts, and metrics.
 
-IMPORTANT: Today's date is ${todayStr}. Use this for any relative date references like "yesterday", "last week", "this month", etc.
+IMPORTANT: Today's date is ${todayStr} (Pacific Time - PST/PDT). Use this for any relative date references like "yesterday", "last week", "this month", etc. All date/time queries should be interpreted in Pacific Time.
 
 IMPORTANT: You MUST only use the exact column names listed below. Do NOT guess or invent column names.
 

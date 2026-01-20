@@ -41,17 +41,82 @@ export interface QueryResponse {
   totalPages: number;
 }
 
+export type NLQAction = "clarify" | "plan" | "suggest";
+
+export interface Timeframe {
+  start: string;
+  end: string;
+  timezone: string;
+  mode?: "rolling" | "calendar";
+}
+
+export interface NLQExplain {
+  table: string;
+  resolvedDateColumn?: string | null;
+  timeframe?: Timeframe | null;
+  filtersApplied?: Array<{
+    column: string;
+    operator: string;
+    value: string;
+    interpretation?: string;
+  }>;
+  sortApplied?: { column: string; direction: "asc" | "desc" } | null;
+  page?: number;
+  limit?: number;
+}
+
+export interface NLQSuggestion {
+  description: string;
+  filters?: Array<{ column: string; op: FilterOperator; value: string | string[] }>;
+  chartType?: string;
+}
+
 export interface NLQPlan {
+  action?: NLQAction;
   table: string;
   page: number;
   filters: Array<{
     column: string;
     op: FilterOperator;
-    value: string;
+    value: string | string[];
   }>;
+  questions?: string[];
+  suggestions?: NLQSuggestion[];
+  explain?: NLQExplain;
   needsClarification?: boolean;
   clarificationQuestion?: string;
   ambiguousColumns?: string[];
+  summary?: string;
+}
+
+export type SmartFollowupIssue = 
+  | "value_mismatch"
+  | "case_mismatch"
+  | "date_out_of_range"
+  | "null_column"
+  | "synonym_mismatch"
+  | "typo"
+  | "unknown";
+
+export interface SmartFollowupChange {
+  filterIndex: number;
+  column: string;
+  currentValue: string;
+  suggestedValue?: string;
+  suggestedOperator?: string;
+  reason: string;
+}
+
+export interface SmartFollowupResponse {
+  likelyIssue: SmartFollowupIssue;
+  suggestedChanges: SmartFollowupChange[];
+  questions?: string[];
+  evidence?: {
+    sampledValues?: Record<string, string[]>;
+    dateRanges?: Record<string, { min: string; max: string }>;
+  };
+  clarificationQuestion?: string;
+  suggestedFilters?: Array<{ column: string; op: FilterOperator; value: string | string[] }>;
   summary?: string;
 }
 

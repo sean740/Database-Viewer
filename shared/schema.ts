@@ -78,19 +78,73 @@ export const nlqRequestSchema = z.object({
   database: z.string(),
   table: z.string().optional(),
   query: z.string(),
+  context: z.string().optional(),
 });
 
 export type NLQRequest = z.infer<typeof nlqRequestSchema>;
 
-// NLQ parsed plan from OpenAI
+// NLQ action enum for clarify/plan/suggest flow
+export const nlqActionSchema = z.enum(["clarify", "plan", "suggest"]);
+export type NLQAction = z.infer<typeof nlqActionSchema>;
+
+// Timeframe object for date range queries
+export const timeframeSchema = z.object({
+  start: z.string(),
+  end: z.string(),
+  timezone: z.string().default("America/Los_Angeles"),
+  mode: z.enum(["rolling", "calendar"]).optional(),
+});
+export type Timeframe = z.infer<typeof timeframeSchema>;
+
+// NLQ filter with support for between operator (array values)
+export const nlqFilterSchema = z.object({
+  column: z.string(),
+  op: filterOperatorSchema,
+  value: z.union([z.string(), z.array(z.string())]),
+});
+export type NLQFilter = z.infer<typeof nlqFilterSchema>;
+
+// NLQ explain object for transparency
+export const nlqExplainSchema = z.object({
+  table: z.string(),
+  resolvedDateColumn: z.string().nullable().optional(),
+  timeframe: timeframeSchema.nullable().optional(),
+  filtersApplied: z.array(z.object({
+    column: z.string(),
+    operator: z.string(),
+    value: z.string(),
+    interpretation: z.string().optional(),
+  })).optional(),
+  sortApplied: z.object({
+    column: z.string(),
+    direction: z.enum(["asc", "desc"]),
+  }).nullable().optional(),
+  page: z.number().optional(),
+  limit: z.number().optional(),
+});
+export type NLQExplain = z.infer<typeof nlqExplainSchema>;
+
+// NLQ suggestion for "suggest" action
+export const nlqSuggestionSchema = z.object({
+  description: z.string(),
+  filters: z.array(nlqFilterSchema).optional(),
+  chartType: z.string().optional(),
+});
+export type NLQSuggestion = z.infer<typeof nlqSuggestionSchema>;
+
+// NLQ parsed plan from OpenAI (extended with action, questions, explain, suggestions)
 export const nlqPlanSchema = z.object({
+  action: nlqActionSchema.optional().default("plan"),
   table: z.string(),
   page: z.number().default(1),
   filters: z.array(z.object({
     column: z.string(),
     op: filterOperatorSchema,
-    value: z.string(),
+    value: z.union([z.string(), z.array(z.string())]),
   })),
+  questions: z.array(z.string()).optional(),
+  suggestions: z.array(nlqSuggestionSchema).optional(),
+  explain: nlqExplainSchema.optional(),
   needsClarification: z.boolean().optional(),
   clarificationQuestion: z.string().optional(),
   ambiguousColumns: z.array(z.string()).optional(),
@@ -98,6 +152,44 @@ export const nlqPlanSchema = z.object({
 });
 
 export type NLQPlan = z.infer<typeof nlqPlanSchema>;
+
+// Smart follow-up issue types
+export const smartFollowupIssueSchema = z.enum([
+  "value_mismatch",
+  "case_mismatch",
+  "date_out_of_range",
+  "null_column",
+  "synonym_mismatch",
+  "typo",
+  "unknown",
+]);
+export type SmartFollowupIssue = z.infer<typeof smartFollowupIssueSchema>;
+
+// Smart follow-up suggested change
+export const smartFollowupChangeSchema = z.object({
+  filterIndex: z.number(),
+  column: z.string(),
+  currentValue: z.string(),
+  suggestedValue: z.string().optional(),
+  suggestedOperator: z.string().optional(),
+  reason: z.string(),
+});
+export type SmartFollowupChange = z.infer<typeof smartFollowupChangeSchema>;
+
+// Smart follow-up response
+export const smartFollowupResponseSchema = z.object({
+  likelyIssue: smartFollowupIssueSchema,
+  suggestedChanges: z.array(smartFollowupChangeSchema),
+  questions: z.array(z.string()).optional(),
+  evidence: z.object({
+    sampledValues: z.record(z.string(), z.array(z.string())).optional(),
+    dateRanges: z.record(z.string(), z.object({ min: z.string(), max: z.string() })).optional(),
+  }).optional(),
+  clarificationQuestion: z.string().optional(),
+  suggestedFilters: z.array(nlqFilterSchema).optional(),
+  summary: z.string().optional(),
+});
+export type SmartFollowupResponse = z.infer<typeof smartFollowupResponseSchema>;
 
 // Filters config file structure
 export const filtersConfigSchema = z.record(z.string(), z.array(filterDefinitionSchema));

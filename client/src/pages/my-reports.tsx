@@ -212,7 +212,9 @@ export default function MyReports() {
       });
       const data = await res.json();
 
-      setChatHistory((prev) => [...prev, { role: "assistant", content: data.message }]);
+      // Handle error responses or missing message
+      const assistantContent = data.message || data.error || "I'm sorry, I couldn't process that request. Please try again.";
+      setChatHistory((prev) => [...prev, { role: "assistant", content: assistantContent }]);
 
       // Handle single block creation
       if (data.action?.action === "create_block" && data.action.block) {

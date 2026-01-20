@@ -207,6 +207,7 @@ export default function MyReports() {
 
       setChatHistory((prev) => [...prev, { role: "assistant", content: data.message }]);
 
+      // Handle single block creation
       if (data.action?.action === "create_block" && data.action.block) {
         const block = data.action.block;
         await createBlockMutation.mutateAsync({
@@ -220,6 +221,23 @@ export default function MyReports() {
             filters: block.config?.filters || [],
           },
         });
+      }
+      
+      // Handle multiple blocks creation (for comparisons)
+      if (data.action?.action === "create_blocks" && Array.isArray(data.action.blocks)) {
+        for (const block of data.action.blocks) {
+          await createBlockMutation.mutateAsync({
+            pageId: selectedPageId,
+            kind: block.kind,
+            title: block.title,
+            config: {
+              ...block.config,
+              database: block.config?.database || "Default",
+              rowLimit: block.config?.rowLimit || 500,
+              filters: block.config?.filters || [],
+            },
+          });
+        }
       }
     } catch (err: any) {
       setChatHistory((prev) => [

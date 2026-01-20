@@ -2866,6 +2866,16 @@ When the user wants to add a block, respond with a JSON action in this format:
   "explanation": "Why this block is useful"
 }
 
+To create MULTIPLE blocks at once (for comparisons), use this format:
+{
+  "action": "create_blocks",
+  "blocks": [
+    { "kind": "table", "title": "Period 1", "config": { ... } },
+    { "kind": "table", "title": "Period 2", "config": { ... } }
+  ],
+  "explanation": "Why these blocks are useful for comparison"
+}
+
 For table blocks, config should have: database, table, columns (array of exact column names from above), filters (array), orderBy, rowLimit
 For table blocks with JOINS (to pull data from related tables):
 - Add a "join" object with: table (the related table like "public.vendors"), on (array of two column names [fromColumn, toColumn] like ["vendor_id", "id"])
@@ -2887,6 +2897,11 @@ FILTER OPERATORS - ONLY USE THESE EXACT VALUES (no others allowed):
 - "between" for date ranges (value must be array of two dates like ["2025-01-01", "2025-12-31"])
 
 IMPORTANT: Do NOT use "in", "like", "!=", or any other operators. For matching one of multiple values, use multiple filters with "eq" operator or use "contains" for partial matching.
+
+CRITICAL DATE RANGE COMPARISONS: When the user asks to compare TWO different date ranges (e.g., "Jan 5-11 vs Jan 12-18"), you MUST create TWO SEPARATE blocks - one for each date range. This is because all filters are combined with AND logic, so putting two "between" filters on the same column in one block will return zero results (a date cannot be in two non-overlapping ranges simultaneously). For comparisons, create separate blocks like:
+- Block 1: "Bookings: Jan 5-11, 2026" with filter between ["2026-01-05", "2026-01-11"]
+- Block 2: "Bookings: Jan 12-18, 2026" with filter between ["2026-01-12", "2026-01-18"]
+This allows side-by-side comparison of the two periods.
 
 CRITICAL: Only use column names that are listed above. For date-based grouping, use groupBy: "month" (or year/day/week/quarter) with xColumn set to the date column like "created_at".
 
@@ -2934,39 +2949,71 @@ Always be helpful and explain your suggestions in simple terms.`;
         if (jsonMatch) {
           action = JSON.parse(jsonMatch[0]);
           
-          // Security: Validate AI-generated action before returning it
-          if (action?.action === "create_block" && action?.block) {
-            const block = action.block;
-            const validKinds = ["table", "chart", "metric", "text"];
+          const validKinds = ["table", "chart", "metric", "text"];
+          
+          // Helper function to validate a single block
+          const validateSingleBlock = async (block: any) => {
+            if (!validKinds.includes(block.kind)) return null;
             
-            if (validKinds.includes(block.kind)) {
-              // Ensure default values are set
-              const config = {
-                ...block.config,
-                database: block.config?.database || "Default",
-                rowLimit: Math.min(block.config?.rowLimit || 500, 10000),
-                filters: block.config?.filters || [],
+            const config = {
+              ...block.config,
+              database: block.config?.database || "Default",
+              rowLimit: Math.min(block.config?.rowLimit || 500, 10000),
+              filters: block.config?.filters || [],
+            };
+            
+            const validation = await validateBlockConfig(config, block.kind, user);
+            
+            if (validation.valid) {
+              return {
+                kind: block.kind,
+                title: block.title || `${block.kind} block`,
+                config,
               };
-              
-              // Validate the config against database metadata and user permissions
-              const validation = await validateBlockConfig(config, block.kind, user);
-              
-              if (validation.valid) {
-                validatedAction = {
-                  action: "create_block",
-                  block: {
-                    kind: block.kind,
-                    title: block.title || `${block.kind} block`,
-                    config,
-                  },
-                  explanation: action.explanation || "",
-                };
-              } else {
-                // AI suggested an invalid action - log and append error to message
-                console.log(`[SECURITY] AI suggested invalid block config: ${validation.error}`);
-                assistantMessage += `\n\n**Note:** I wasn't able to create this block because: ${validation.error}. Please try rephrasing your request or ask me which columns are available in the table you want to use.`;
-                validatedAction = null;
+            } else {
+              console.log(`[SECURITY] AI suggested invalid block config: ${validation.error}`);
+              return { error: validation.error };
+            }
+          };
+          
+          // Handle single block creation
+          if (action?.action === "create_block" && action?.block) {
+            const result = await validateSingleBlock(action.block);
+            if (result && !('error' in result)) {
+              validatedAction = {
+                action: "create_block",
+                block: result,
+                explanation: action.explanation || "",
+              };
+            } else if (result && 'error' in result) {
+              assistantMessage += `\n\n**Note:** I wasn't able to create this block because: ${result.error}. Please try rephrasing your request or ask me which columns are available in the table you want to use.`;
+            }
+          }
+          
+          // Handle multiple blocks creation (for comparisons)
+          if (action?.action === "create_blocks" && Array.isArray(action?.blocks)) {
+            const validatedBlocks: any[] = [];
+            const errors: string[] = [];
+            
+            for (const block of action.blocks) {
+              const result = await validateSingleBlock(block);
+              if (result && !('error' in result)) {
+                validatedBlocks.push(result);
+              } else if (result && 'error' in result && result.error) {
+                errors.push(result.error);
               }
+            }
+            
+            if (validatedBlocks.length > 0) {
+              validatedAction = {
+                action: "create_blocks",
+                blocks: validatedBlocks,
+                explanation: action.explanation || "",
+              };
+            }
+            
+            if (errors.length > 0) {
+              assistantMessage += `\n\n**Note:** Some blocks could not be created: ${errors.join("; ")}. Please try rephrasing your request.`;
             }
           }
         }

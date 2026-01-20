@@ -517,32 +517,50 @@ function ReportBlockCard({ block, onDelete }: { block: ReportBlock; onDelete: ()
     setIsRefreshing(false);
   };
 
-  const handleExport = () => {
-    if (!result || result.type !== "table" || !result.rows?.length) return;
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExport = async () => {
+    if (!result || result.type !== "table") return;
     
-    const rows = result.rows;
-    const headers = Object.keys(rows[0]);
-    
-    const escapeCSV = (val: unknown): string => {
-      const str = String(val ?? "");
-      if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-        return `"${str.replace(/"/g, '""')}"`;
+    setIsExporting(true);
+    try {
+      // Fetch all data for export
+      const res = await apiRequest("POST", `/api/reports/blocks/${block.id}/run`, { exportAll: true });
+      const exportData = await res.json() as BlockQueryResult;
+      
+      if (exportData.type !== "table" || !exportData.rows?.length) {
+        setIsExporting(false);
+        return;
       }
-      return str;
-    };
-    
-    const csvContent = [
-      headers.join(","),
-      ...rows.map(row => headers.map(h => escapeCSV(row[h])).join(","))
-    ].join("\n");
-    
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${block.title || "report"}_${new Date().toISOString().split("T")[0]}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+      
+      const rows = exportData.rows;
+      const headers = Object.keys(rows[0]);
+      
+      const escapeCSV = (val: unknown): string => {
+        const str = String(val ?? "");
+        if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+      
+      const csvContent = [
+        headers.join(","),
+        ...rows.map(row => headers.map(h => escapeCSV(row[h])).join(","))
+      ].join("\n");
+      
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${block.title || "report"}_${new Date().toISOString().split("T")[0]}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export failed:", err);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const getBlockIcon = () => {
@@ -598,9 +616,14 @@ function ReportBlockCard({ block, onDelete }: { block: ReportBlock; onDelete: ()
               size="icon" 
               variant="ghost" 
               onClick={handleExport}
+              disabled={isExporting}
               data-testid={`button-export-block-${block.id}`}
             >
-              <Download className="h-4 w-4" />
+              {isExporting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
             </Button>
           )}
           <Button size="icon" variant="ghost" onClick={onDelete} data-testid={`button-delete-block-${block.id}`}>

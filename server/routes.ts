@@ -2321,8 +2321,9 @@ export async function registerRoutes(
       }
 
       const { id } = req.params;
-      const { page: pageNum = 1 } = req.body; // Pagination support
+      const { page: pageNum = 1, exportAll = false } = req.body; // Pagination support
       const currentPage = Math.max(1, parseInt(pageNum) || 1);
+      const MAX_EXPORT_ROWS = 10000; // Safety limit for exports
 
       // Get block and verify ownership through page
       const [block] = await db.select().from(reportBlocks).where(eq(reportBlocks.id, id));
@@ -2460,18 +2461,24 @@ export async function registerRoutes(
           query += ` ORDER BY ${orderColumnRef} ${tableConfig.orderBy.direction === "desc" ? "DESC" : "ASC"}`;
         }
         
-        // Add pagination
-        query += ` LIMIT ${REPORT_BLOCK_PAGE_SIZE} OFFSET ${offset}`;
+        // Add pagination or export limit
+        if (exportAll) {
+          query += ` LIMIT ${MAX_EXPORT_ROWS}`;
+        } else {
+          query += ` LIMIT ${REPORT_BLOCK_PAGE_SIZE} OFFSET ${offset}`;
+        }
         
         const result = await pool.query(query, params);
         
         await logAudit({
           userId,
           userEmail: user.email,
-          action: "REPORT_QUERY",
+          action: exportAll ? "REPORT_EXPORT" : "REPORT_QUERY",
           database: config.database,
           table: config.table,
-          details: `Table block query: page ${safePage} of ${totalPages} (${result.rows.length} rows)${tableConfig.join ? ` (joined with ${tableConfig.join.table})` : ''}`,
+          details: exportAll 
+            ? `Table block export: ${result.rows.length} rows${tableConfig.join ? ` (joined with ${tableConfig.join.table})` : ''}`
+            : `Table block query: page ${safePage} of ${totalPages} (${result.rows.length} rows)${tableConfig.join ? ` (joined with ${tableConfig.join.table})` : ''}`,
           ip: req.ip || req.socket.remoteAddress,
         });
         
@@ -2480,9 +2487,9 @@ export async function registerRoutes(
           rows: result.rows, 
           rowCount: result.rows.length,
           totalCount,
-          page: safePage,
-          pageSize: REPORT_BLOCK_PAGE_SIZE,
-          totalPages
+          page: exportAll ? 1 : safePage,
+          pageSize: exportAll ? result.rows.length : REPORT_BLOCK_PAGE_SIZE,
+          totalPages: exportAll ? 1 : totalPages
         });
         
       } else if (block.kind === "chart") {

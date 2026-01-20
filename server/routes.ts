@@ -32,6 +32,21 @@ import type {
   FilterOperator,
   NLQPlan,
 } from "@shared/schema";
+import {
+  getOpenAIClient,
+  AI_CONFIG,
+  getTableDataDictionary,
+  formatDataDictionaryForPrompt,
+  getDateColumns,
+  getBestDateColumn,
+  resolveSemanticReference,
+  formatRolesForPrompt,
+  buildNLQSystemPrompt,
+  buildSmartFollowupPrompt,
+  parseAndValidateNLQResponse,
+  parseAndValidateSmartFollowupResponse,
+  type TableDataDictionary,
+} from "./ai";
 
 const PAGE_SIZE = 50;
 
@@ -1628,7 +1643,7 @@ export async function registerRoutes(
     res.json({ enabled: client !== null });
   });
 
-  // Natural Language Query
+  // Natural Language Query (upgraded with modular AI)
   app.post("/api/nlq", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const { database, query, table: currentTable, context } = req.body;
@@ -1646,7 +1661,6 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Please select a table first" });
       }
       
-      // Check table access for external customers
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       if (user?.role === "external_customer") {
@@ -1656,23 +1670,18 @@ export async function registerRoutes(
         }
       }
 
-      // Get column information with data types for schema-aware prompts
-      interface ColumnWithType {
-        name: string;
-        dataType: string;
-      }
-      let columnsWithTypes: ColumnWithType[] = [];
-
-      if (database && currentTable) {
-        const pool = getPool(database);
-        const [schema, tableName] = currentTable.split(".");
+      const pool = getPool(database);
+      const [schema, tableName] = currentTable.split(".");
+      
+      const dictionary = await getTableDataDictionary(pool, database, schema, tableName);
+      
+      let columnsWithTypes: Array<{ name: string; dataType: string }> = [];
+      if (dictionary) {
+        columnsWithTypes = dictionary.columns.map(c => ({ name: c.name, dataType: c.dataType }));
+      } else {
         const columnsResult = await pool.query(
-          `
-          SELECT column_name, data_type
-          FROM information_schema.columns
-          WHERE table_schema = $1 AND table_name = $2
-          ORDER BY ordinal_position
-          `,
+          `SELECT column_name, data_type FROM information_schema.columns 
+           WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`,
           [schema, tableName]
         );
         columnsWithTypes = columnsResult.rows.map((r) => ({
@@ -1681,113 +1690,61 @@ export async function registerRoutes(
         }));
       }
 
-      // Format columns for the prompt with data types
-      const columnInfo = columnsWithTypes
-        .map((c) => `  - ${c.name} (${c.dataType})`)
-        .join("\n");
-
-      // Find date/timestamp columns for potential ambiguity detection
-      const dateColumns = columnsWithTypes
+      const dateColumnNames = columnsWithTypes
         .filter((c) => c.dataType.includes("date") || c.dataType.includes("timestamp"))
         .map((c) => c.name);
 
-      // Get current date for relative date calculations (in Pacific Time)
-      const today = new Date();
-      const pacificFormatter = new Intl.DateTimeFormat('en-CA', { 
-        timeZone: 'America/Los_Angeles', 
-        year: 'numeric', 
-        month: '2-digit', 
-        day: '2-digit' 
-      });
-      const todayStr = pacificFormatter.format(today); // YYYY-MM-DD format in PST/PDT
-      
-      const systemPrompt = `You are a helpful assistant that converts natural language queries into structured query plans for a database viewer.
+      const semanticResolution = dictionary 
+        ? resolveSemanticReference(query, dictionary.columns)
+        : { resolvedColumn: null, type: null, needsClarification: false };
 
-IMPORTANT: Today's date is ${todayStr} (Pacific Time - PST/PDT). Use this for any relative date references like "yesterday", "last week", "this month", etc. All date/time queries should be interpreted in Pacific Time.
-
-The user is querying the table: ${currentTable}
-
-Available columns (with data types):
-${columnInfo}
-
-You must return ONLY a valid JSON object with this structure:
-{
-  "table": "${currentTable}",
-  "page": 1,
-  "filters": [
-    {"column": "column_name", "op": "operator", "value": "filter_value"}
-  ],
-  "needsClarification": false,
-  "clarificationQuestion": null,
-  "ambiguousColumns": [],
-  "summary": "A brief description of what this filter does"
-}
-
-Valid operators are:
-- eq: equals (exact match)
-- contains: substring match (case-insensitive)
-- gt: greater than
-- gte: greater than or equal
-- lt: less than
-- lte: less than or equal
-
-IMPORTANT RULES:
-1. Always use the table "${currentTable}" - do not change it
-2. Only use columns that exist in the column list above
-3. For date queries (years, months, dates):
-   - If there are multiple date columns (${dateColumns.join(", ")}), ask which one to use
-   - Set "needsClarification": true and provide a "clarificationQuestion"
-   - List the ambiguous columns in "ambiguousColumns"
-4. For year filtering, use gte/lte with date ranges (e.g., >= '2026-01-01' AND < '2027-01-01')
-5. Always provide a "summary" field describing what the filter will do
-6. If the query is unclear or you need more information, set "needsClarification": true
-7. Only return valid JSON, no explanation or markdown
-
-${context ? `Previous context from conversation:\n${context}\n` : ""}`;
-
-      const response = await client.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: query },
-        ],
-        max_completion_tokens: 800,
-        temperature: 0.1,
+      const systemPrompt = buildNLQSystemPrompt({
+        table: currentTable,
+        dictionary,
+        columns: columnsWithTypes,
+        dateColumns: dateColumnNames,
+        context,
       });
 
-      const content = response.choices[0]?.message?.content || "{}";
-      
-      // Parse the response
-      let plan: NLQPlan;
-      try {
-        // Clean up potential markdown code blocks
-        const cleanContent = content.replace(/```json\n?|\n?```/g, "").trim();
-        plan = JSON.parse(cleanContent);
-      } catch {
-        return res.status(400).json({ error: "Failed to parse AI response" });
-      }
+      const makeRequest = async () => {
+        const response = await client.chat.completions.create({
+          model: AI_CONFIG.nlq.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: query },
+          ],
+          max_completion_tokens: AI_CONFIG.nlq.maxTokens,
+          temperature: AI_CONFIG.nlq.temperature,
+        });
+        return response.choices[0]?.message?.content || "{}";
+      };
 
-      // Force the table to be the currently selected table
-      plan.table = currentTable;
-
-      // Validate filters
-      const validOperators = ["eq", "contains", "gt", "gte", "lt", "lte"];
+      const content = await makeRequest();
       const validColumns = columnsWithTypes.map((c) => c.name);
       
-      if (plan.filters && Array.isArray(plan.filters)) {
-        for (const filter of plan.filters) {
-          if (!validOperators.includes(filter.op)) {
-            return res.status(400).json({ error: `Invalid operator: ${filter.op}` });
-          }
-          if (validColumns.length > 0 && !validColumns.includes(filter.column)) {
-            return res.status(400).json({ error: `Invalid column: ${filter.column}. Available columns: ${validColumns.join(", ")}` });
-          }
-        }
-      } else {
-        plan.filters = [];
+      const parseResult = await parseAndValidateNLQResponse(
+        content,
+        currentTable,
+        validColumns,
+        makeRequest
+      );
+
+      if (!parseResult.success) {
+        return res.status(400).json({ error: parseResult.error });
       }
 
+      const plan = parseResult.data;
+      plan.table = currentTable;
       plan.page = plan.page || 1;
+      plan.action = plan.action || "plan";
+
+      if (plan.action === "clarify" && semanticResolution.needsClarification && semanticResolution.options) {
+        plan.questions = plan.questions || [];
+        if (plan.questions.length === 0) {
+          plan.questions.push(`Which date column should I use? Available options: ${semanticResolution.options.join(", ")}`);
+        }
+        plan.ambiguousColumns = semanticResolution.options;
+      }
 
       res.json(plan);
     } catch (err) {
@@ -1798,7 +1755,7 @@ ${context ? `Previous context from conversation:\n${context}\n` : ""}`;
     }
   });
 
-  // NLQ Smart Follow-up - called when a query returns no results
+  // NLQ Smart Follow-up (upgraded with modular AI)
   app.post("/api/nlq/smart-followup", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const { database, table: currentTable, filters, context } = req.body;
@@ -1812,7 +1769,6 @@ ${context ? `Previous context from conversation:\n${context}\n` : ""}`;
         return res.status(400).json({ error: "Missing required parameters" });
       }
 
-      // Check table access for external customers
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       if (user?.role === "external_customer") {
@@ -1825,19 +1781,27 @@ ${context ? `Previous context from conversation:\n${context}\n` : ""}`;
       const pool = getPool(database);
       const [schema, tableName] = currentTable.split(".");
 
-      // Get column information with data types
-      const columnsResult = await pool.query(
-        `SELECT column_name, data_type
-         FROM information_schema.columns
-         WHERE table_schema = $1 AND table_name = $2`,
-        [schema, tableName]
-      );
-      const columnTypes: Record<string, string> = {};
-      columnsResult.rows.forEach((r) => {
-        columnTypes[r.column_name] = r.data_type;
-      });
+      const dictionary = await getTableDataDictionary(pool, database, schema, tableName);
 
-      // Sample distinct values for each filtered column
+      const columnTypes: Record<string, string> = {};
+      if (dictionary) {
+        dictionary.columns.forEach((c) => {
+          columnTypes[c.name] = c.dataType;
+        });
+      } else {
+        const columnsResult = await pool.query(
+          `SELECT column_name, data_type FROM information_schema.columns 
+           WHERE table_schema = $1 AND table_name = $2`,
+          [schema, tableName]
+        );
+        columnsResult.rows.forEach((r) => {
+          columnTypes[r.column_name] = r.data_type;
+        });
+      }
+
+      const TIMEOUT_MS = 3000;
+      const MAX_DISTINCT_VALUES = 15;
+
       interface ColumnSample {
         column: string;
         dataType: string;
@@ -1848,95 +1812,67 @@ ${context ? `Previous context from conversation:\n${context}\n` : ""}`;
       }
       const columnSamples: ColumnSample[] = [];
 
-      const TIMEOUT_MS = 3000;
-      const MAX_DISTINCT_VALUES = 15;
+      const queryWithTimeout = async (queryStr: string): Promise<any> => {
+        return new Promise((resolve, reject) => {
+          const timeoutId = setTimeout(() => reject(new Error("Timeout")), TIMEOUT_MS);
+          pool.query(queryStr)
+            .then((result) => {
+              clearTimeout(timeoutId);
+              resolve(result);
+            })
+            .catch((err) => {
+              clearTimeout(timeoutId);
+              reject(err);
+            });
+        });
+      };
 
       for (const filter of filters) {
         const colName = filter.column;
         const dataType = columnTypes[colName];
-        
         if (!dataType) continue;
 
         const sample: ColumnSample = {
           column: colName,
-          dataType: dataType,
-          filteredValue: filter.value,
+          dataType,
+          filteredValue: Array.isArray(filter.value) ? filter.value.join(" - ") : filter.value,
           operator: filter.op,
         };
 
         try {
-          // Helper function for timeout with proper cleanup
-          const queryWithTimeout = async (queryStr: string): Promise<any> => {
-            return new Promise((resolve, reject) => {
-              let timeoutId: NodeJS.Timeout | null = null;
-              let settled = false;
-              
-              timeoutId = setTimeout(() => {
-                if (!settled) {
-                  settled = true;
-                  reject(new Error("Timeout"));
-                }
-              }, TIMEOUT_MS);
-              
-              pool.query(queryStr)
-                .then((result) => {
-                  if (!settled) {
-                    settled = true;
-                    if (timeoutId) clearTimeout(timeoutId);
-                    resolve(result);
-                  }
-                })
-                .catch((err) => {
-                  if (!settled) {
-                    settled = true;
-                    if (timeoutId) clearTimeout(timeoutId);
-                    reject(err);
-                  }
-                });
-            });
-          };
-
-          // For string/text columns, get distinct values
-          if (dataType.includes("character") || dataType.includes("text") || dataType === "USER-DEFINED") {
-            const distinctQuery = `
-              SELECT DISTINCT "${colName}" as val
-              FROM "${schema}"."${tableName}"
-              WHERE "${colName}" IS NOT NULL
-              ORDER BY "${colName}"
-              LIMIT ${MAX_DISTINCT_VALUES}
-            `;
-            
-            const result = await queryWithTimeout(distinctQuery);
-            sample.actualValues = result.rows.map((r: any) => String(r.val));
+          if (dictionary) {
+            const colStats = dictionary.columns.find(c => c.name === colName);
+            if (colStats?.topValues) {
+              sample.actualValues = colStats.topValues.map(v => v.value);
+            } else if (colStats?.dateRange) {
+              sample.dateRange = colStats.dateRange;
+            }
           }
-          // For date/timestamp columns, get min/max range
-          else if (dataType.includes("date") || dataType.includes("timestamp")) {
-            const rangeQuery = `
-              SELECT 
-                MIN("${colName}")::text as min_val,
-                MAX("${colName}")::text as max_val
-              FROM "${schema}"."${tableName}"
-              WHERE "${colName}" IS NOT NULL
-            `;
-            
-            const result = await queryWithTimeout(rangeQuery);
-            
-            if (result.rows[0]) {
-              sample.dateRange = {
-                min: result.rows[0].min_val,
-                max: result.rows[0].max_val,
-              };
+
+          if (!sample.actualValues && !sample.dateRange) {
+            if (dataType.includes("character") || dataType.includes("text") || dataType === "USER-DEFINED") {
+              const result = await queryWithTimeout(`
+                SELECT DISTINCT "${colName}" as val FROM "${schema}"."${tableName}" 
+                WHERE "${colName}" IS NOT NULL ORDER BY "${colName}" LIMIT ${MAX_DISTINCT_VALUES}
+              `);
+              sample.actualValues = result.rows.map((r: any) => String(r.val));
+            } else if (dataType.includes("date") || dataType.includes("timestamp")) {
+              const result = await queryWithTimeout(`
+                SELECT MIN("${colName}")::text as min_val, MAX("${colName}")::text as max_val 
+                FROM "${schema}"."${tableName}" WHERE "${colName}" IS NOT NULL
+              `);
+              if (result.rows[0]) {
+                sample.dateRange = { min: result.rows[0].min_val, max: result.rows[0].max_val };
+              }
             }
           }
         } catch (err) {
-          // Skip this column if query times out or fails
           console.log(`Skipping column ${colName} sampling:`, err);
         }
 
         columnSamples.push(sample);
       }
 
-      // Build AI prompt with sampled values
       let samplingInfo = "";
       for (const sample of columnSamples) {
         if (sample.actualValues && sample.actualValues.length > 0) {
@@ -1950,73 +1886,46 @@ ${context ? `Previous context from conversation:\n${context}\n` : ""}`;
 
       if (!samplingInfo) {
         return res.json({
+          likelyIssue: "unknown",
+          suggestedChanges: [],
           clarificationQuestion: "No results found for your query. Try adjusting your filter values or broadening your search.",
-          needsClarification: true,
+          summary: "Unable to sample column values to provide suggestions.",
         });
       }
 
-      // Get current date for relative date references (in Pacific Time)
-      const today = new Date();
-      const pacificFormatter = new Intl.DateTimeFormat('en-CA', { 
-        timeZone: 'America/Los_Angeles', 
-        year: 'numeric', 
-        month: '2-digit', 
-        day: '2-digit' 
-      });
-      const todayStr = pacificFormatter.format(today); // YYYY-MM-DD format in PST/PDT
-      
-      const systemPrompt = `You are a helpful assistant that helps users find data in a database when their query returns no results.
-
-IMPORTANT: Today's date is ${todayStr} (Pacific Time - PST/PDT). Use this for any relative date references. All date/time queries should be interpreted in Pacific Time.
-
-The user's query returned 0 results. Here's what we found about their filters:
-${samplingInfo}
-
-Your task:
-1. Identify which filter value(s) don't match the actual data
-2. For text columns: Look for synonyms or similar values (e.g., "completed" → "done", "cancelled" → "canceled")
-3. For date columns: Check if the date range is outside the available data
-4. Suggest specific alternatives that would return results
-
-Return ONLY a valid JSON object:
-{
-  "clarificationQuestion": "A helpful question suggesting alternatives. Be specific about which values to use.",
-  "needsClarification": true,
-  "suggestedFilters": [
-    {"column": "column_name", "op": "operator", "value": "suggested_value"}
-  ],
-  "summary": "Brief explanation of why the query returned no results"
-}
-
-Be conversational and helpful. If you find a likely synonym or alternative, suggest it directly.
-Example: "No bookings found with status 'completed'. I found that this table uses 'done' for completed bookings. Would you like to search for bookings with status 'done' instead?"
-
-${context ? `Previous conversation context:\n${context}` : ""}`;
-
-      const response = await client.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: "Help me understand why my query returned no results and suggest alternatives." },
-        ],
-        max_completion_tokens: 600,
-        temperature: 0.3,
+      const systemPrompt = buildSmartFollowupPrompt({
+        table: currentTable,
+        filters: filters.map((f: any) => ({ column: f.column, op: f.op, value: Array.isArray(f.value) ? f.value.join(" - ") : f.value })),
+        samplingInfo,
+        context,
       });
 
-      const content = response.choices[0]?.message?.content || "{}";
-      
-      let result;
-      try {
-        const cleanContent = content.replace(/```json\n?|\n?```/g, "").trim();
-        result = JSON.parse(cleanContent);
-      } catch {
-        result = {
-          clarificationQuestion: content,
-          needsClarification: true,
-        };
+      const makeRequest = async () => {
+        const response = await client.chat.completions.create({
+          model: AI_CONFIG.smartFollowup.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: "Help me understand why my query returned no results and suggest alternatives." },
+          ],
+          max_completion_tokens: AI_CONFIG.smartFollowup.maxTokens,
+          temperature: AI_CONFIG.smartFollowup.temperature,
+        });
+        return response.choices[0]?.message?.content || "{}";
+      };
+
+      const content = await makeRequest();
+      const parseResult = await parseAndValidateSmartFollowupResponse(content, makeRequest);
+
+      if (!parseResult.success) {
+        return res.json({
+          likelyIssue: "unknown",
+          suggestedChanges: [],
+          clarificationQuestion: "I couldn't analyze your query. Try adjusting your filter values.",
+          summary: parseResult.error,
+        });
       }
 
-      res.json(result);
+      res.json(parseResult.data);
     } catch (err) {
       console.error("Error processing smart followup:", err);
       res.status(500).json({

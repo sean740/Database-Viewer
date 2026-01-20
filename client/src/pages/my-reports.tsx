@@ -58,6 +58,7 @@ import {
   Bot,
   Sparkles,
   ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -87,6 +88,10 @@ interface BlockQueryResult {
   type: "table" | "chart" | "metric" | "text";
   rows?: any[];
   rowCount?: number;
+  totalCount?: number;
+  page?: number;
+  pageSize?: number;
+  totalPages?: number;
   data?: any[];
   chartType?: string;
   value?: number;
@@ -493,10 +498,12 @@ export default function MyReports() {
 }
 
 function ReportBlockCard({ block, onDelete }: { block: ReportBlock; onDelete: () => void }) {
-  const { data: result, isLoading, error } = useQuery<BlockQueryResult>({
-    queryKey: ["/api/reports/blocks", block.id, "run"],
+  const [currentPage, setCurrentPage] = useState(1);
+  
+  const { data: result, isLoading, error, refetch } = useQuery<BlockQueryResult>({
+    queryKey: ["/api/reports/blocks", block.id, "run", currentPage],
     queryFn: async () => {
-      const res = await apiRequest("POST", `/api/reports/blocks/${block.id}/run`);
+      const res = await apiRequest("POST", `/api/reports/blocks/${block.id}/run`, { page: currentPage });
       return res.json();
     },
   });
@@ -513,6 +520,18 @@ function ReportBlockCard({ block, onDelete }: { block: ReportBlock; onDelete: ()
         return <Type className="h-4 w-4" />;
       default:
         return null;
+    }
+  };
+  
+  const handlePrevPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1);
+    }
+  };
+  
+  const handleNextPage = () => {
+    if (result?.totalPages && currentPage < result.totalPages) {
+      setCurrentPage(currentPage + 1);
     }
   };
 
@@ -535,33 +554,66 @@ function ReportBlockCard({ block, onDelete }: { block: ReportBlock; onDelete: ()
         ) : error ? (
           <div className="text-sm text-destructive text-center py-4">Failed to load data</div>
         ) : result?.type === "table" ? (
-          <div className="overflow-x-auto max-h-64">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b">
-                  {result.rows && result.rows[0] &&
-                    Object.keys(result.rows[0]).map((key) => (
-                      <th key={key} className="text-left py-2 px-2 font-medium text-muted-foreground">
-                        {key}
-                      </th>
-                    ))}
-                </tr>
-              </thead>
-              <tbody>
-                {result.rows?.slice(0, 10).map((row, idx) => (
-                  <tr key={idx} className="border-b last:border-0">
-                    {Object.values(row).map((val, i) => (
-                      <td key={i} className="py-2 px-2 truncate max-w-[150px]">
-                        {String(val ?? "")}
-                      </td>
-                    ))}
+          <div className="overflow-x-auto">
+            <div className="max-h-80">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b">
+                    {result.rows && result.rows[0] &&
+                      Object.keys(result.rows[0]).map((key) => (
+                        <th key={key} className="text-left py-2 px-2 font-medium text-muted-foreground">
+                          {key}
+                        </th>
+                      ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            {result.rowCount && result.rowCount > 10 && (
+                </thead>
+                <tbody>
+                  {result.rows?.map((row, idx) => (
+                    <tr key={idx} className="border-b last:border-0">
+                      {Object.values(row).map((val, i) => (
+                        <td key={i} className="py-2 px-2 truncate max-w-[150px]">
+                          {String(val ?? "")}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* Pagination controls */}
+            {result.totalPages && result.totalPages > 1 && (
+              <div className="flex items-center justify-between mt-3 pt-3 border-t">
+                <p className="text-xs text-muted-foreground">
+                  {result.totalCount?.toLocaleString()} total rows
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    onClick={handlePrevPage} 
+                    disabled={currentPage <= 1}
+                    data-testid={`button-prev-page-${block.id}`}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Page {result.page} of {result.totalPages}
+                  </span>
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    onClick={handleNextPage} 
+                    disabled={currentPage >= (result.totalPages || 1)}
+                    data-testid={`button-next-page-${block.id}`}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+            {result.totalPages === 1 && result.totalCount && (
               <p className="text-xs text-muted-foreground text-center mt-2">
-                Showing 10 of {result.rowCount} rows
+                {result.totalCount?.toLocaleString()} rows
               </p>
             )}
           </div>

@@ -2400,7 +2400,9 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
     }
   });
 
-  // Execute a report block query (with safety guardrails)
+  // Execute a report block query (with safety guardrails and pagination)
+  const REPORT_BLOCK_PAGE_SIZE = 50;
+  
   app.post("/api/reports/blocks/:id/run", isAuthenticated, reportLimiter, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
@@ -2410,6 +2412,8 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
       }
 
       const { id } = req.params;
+      const { page: pageNum = 1 } = req.body; // Pagination support
+      const currentPage = Math.max(1, parseInt(pageNum) || 1);
 
       // Get block and verify ownership through page
       const [block] = await db.select().from(reportBlocks).where(eq(reportBlocks.id, id));
@@ -2441,8 +2445,6 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
       }
       
       const pool = getPool(config.database);
-      const configWithLimit = config as TableBlockConfig | ChartBlockConfig;
-      const rowLimit = Math.min((configWithLimit as any).rowLimit || 500, 10000); // Max 10k rows
       
       // Parse table name to get schema and table
       const parsedTable = parseTableName(config.table);
@@ -2513,6 +2515,28 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
           query += ` WHERE ${whereClauses.join(" AND ")}`;
         }
         
+        // Build base query for counting
+        let baseQuery = `FROM ${tableRef} AS ${mainAlias}`;
+        if (tableConfig.join?.table) {
+          const joinParsed = parseTableName(tableConfig.join.table);
+          if (joinParsed) {
+            const joinTableRef = `"${joinParsed.schema}"."${joinParsed.table}"`;
+            const joinType = tableConfig.join.type === "inner" ? "INNER JOIN" : "LEFT JOIN";
+            const [fromCol, toCol] = tableConfig.join.on;
+            baseQuery += ` ${joinType} ${joinTableRef} AS ${joinAlias} ON ${mainAlias}."${fromCol}" = ${joinAlias}."${toCol}"`;
+          }
+        }
+        if (tableConfig.filters?.length > 0) {
+          baseQuery += ` WHERE ${query.split(" WHERE ")[1]?.split(" ORDER BY ")[0] || "1=1"}`;
+        }
+        
+        // Get total count
+        const countResult = await pool.query(`SELECT COUNT(*) as count ${baseQuery}`, params);
+        const totalCount = parseInt(countResult.rows[0]?.count || "0");
+        const totalPages = Math.max(1, Math.ceil(totalCount / REPORT_BLOCK_PAGE_SIZE));
+        const safePage = Math.min(Math.max(1, currentPage), totalPages);
+        const offset = (safePage - 1) * REPORT_BLOCK_PAGE_SIZE;
+        
         // Add order by (handle join columns with dots)
         if (tableConfig.orderBy) {
           let orderColumnRef: string;
@@ -2527,7 +2551,8 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
           query += ` ORDER BY ${orderColumnRef} ${tableConfig.orderBy.direction === "desc" ? "DESC" : "ASC"}`;
         }
         
-        query += ` LIMIT ${rowLimit}`;
+        // Add pagination
+        query += ` LIMIT ${REPORT_BLOCK_PAGE_SIZE} OFFSET ${offset}`;
         
         const result = await pool.query(query, params);
         
@@ -2537,11 +2562,19 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
           action: "REPORT_QUERY",
           database: config.database,
           table: config.table,
-          details: `Table block query: ${result.rows.length} rows${tableConfig.join ? ` (joined with ${tableConfig.join.table})` : ''}`,
+          details: `Table block query: page ${safePage} of ${totalPages} (${result.rows.length} rows)${tableConfig.join ? ` (joined with ${tableConfig.join.table})` : ''}`,
           ip: req.ip || req.socket.remoteAddress,
         });
         
-        res.json({ type: "table", rows: result.rows, rowCount: result.rows.length });
+        res.json({ 
+          type: "table", 
+          rows: result.rows, 
+          rowCount: result.rows.length,
+          totalCount,
+          page: safePage,
+          pageSize: REPORT_BLOCK_PAGE_SIZE,
+          totalPages
+        });
         
       } else if (block.kind === "chart") {
         const chartConfig = config as ChartBlockConfig;
@@ -2604,7 +2637,7 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
             query += ` WHERE ${whereClauses.join(" AND ")}`;
           }
           
-          query += ` GROUP BY ${groupByExpr} ORDER BY ${groupByExpr} LIMIT ${rowLimit}`;
+          query += ` GROUP BY ${groupByExpr} ORDER BY ${groupByExpr} LIMIT 500`;
         } else {
           selectPart = `"${chartConfig.xColumn}" as label, "${chartConfig.yColumn}" as value`;
           query = `SELECT ${selectPart} FROM ${tableRef}`;
@@ -2618,7 +2651,7 @@ ${context ? `Previous conversation context:\n${context}` : ""}`;
             query += ` WHERE ${whereClauses.join(" AND ")}`;
           }
           
-          query += ` LIMIT ${rowLimit}`;
+          query += ` LIMIT 500`;
         }
         
         const result = await pool.query(query, params);

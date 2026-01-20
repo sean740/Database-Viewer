@@ -59,6 +59,8 @@ import {
   Sparkles,
   ChevronLeft,
   ChevronRight,
+  RefreshCw,
+  Download,
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -499,6 +501,7 @@ export default function MyReports() {
 
 function ReportBlockCard({ block, onDelete }: { block: ReportBlock; onDelete: () => void }) {
   const [currentPage, setCurrentPage] = useState(1);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
   const { data: result, isLoading, error, refetch } = useQuery<BlockQueryResult>({
     queryKey: ["/api/reports/blocks", block.id, "run", currentPage],
@@ -507,6 +510,40 @@ function ReportBlockCard({ block, onDelete }: { block: ReportBlock; onDelete: ()
       return res.json();
     },
   });
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await refetch();
+    setIsRefreshing(false);
+  };
+
+  const handleExport = () => {
+    if (!result || result.type !== "table" || !result.rows?.length) return;
+    
+    const rows = result.rows;
+    const headers = Object.keys(rows[0]);
+    
+    const escapeCSV = (val: unknown): string => {
+      const str = String(val ?? "");
+      if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+    
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => headers.map(h => escapeCSV(row[h])).join(","))
+    ].join("\n");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${block.title || "report"}_${new Date().toISOString().split("T")[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const getBlockIcon = () => {
     switch (block.kind) {
@@ -542,9 +579,34 @@ function ReportBlockCard({ block, onDelete }: { block: ReportBlock; onDelete: ()
           {getBlockIcon()}
           <CardTitle className="text-sm font-medium">{block.title || `${block.kind} block`}</CardTitle>
         </div>
-        <Button size="icon" variant="ghost" onClick={onDelete} data-testid={`button-delete-block-${block.id}`}>
-          <Trash2 className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button 
+            size="icon" 
+            variant="ghost" 
+            onClick={handleRefresh}
+            disabled={isLoading || isRefreshing}
+            data-testid={`button-refresh-block-${block.id}`}
+          >
+            {isRefreshing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+          </Button>
+          {result?.type === "table" && result.rows && result.rows.length > 0 && (
+            <Button 
+              size="icon" 
+              variant="ghost" 
+              onClick={handleExport}
+              data-testid={`button-export-block-${block.id}`}
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+          )}
+          <Button size="icon" variant="ghost" onClick={onDelete} data-testid={`button-delete-block-${block.id}`}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="p-4 pt-0">
         {isLoading ? (

@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from "react";
-import { Sparkles, Loader2, Send, X, MessageSquare } from "lucide-react";
+import { Sparkles, Loader2, Send, X, MessageSquare, Info, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { NLQPlan } from "@/lib/types";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import type { NLQPlan, NLQExplain, SmartFollowupResponse } from "@/lib/types";
 import { OPERATOR_LABELS } from "@/lib/types";
 
 interface Message {
@@ -13,7 +14,17 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   plan?: NLQPlan;
+  questions?: string[];
+  explain?: NLQExplain;
+  smartFollowup?: SmartFollowupResponse;
   isError?: boolean;
+}
+
+function formatFilterValue(value: string | string[]): string {
+  if (Array.isArray(value)) {
+    return value.join(" to ");
+  }
+  return value;
 }
 
 interface NLQPanelProps {
@@ -88,7 +99,6 @@ export function NLQPanel({
     setIsLoading(true);
 
     try {
-      // Use the smart follow-up endpoint that samples actual column values
       const response = await fetch("/api/nlq/smart-followup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -105,25 +115,34 @@ export function NLQPanel({
         throw new Error(data.error || "Failed to process query");
       }
 
-      const result = await response.json();
+      const result: SmartFollowupResponse = await response.json();
+
+      const contentParts: string[] = [];
+      if (result.summary) contentParts.push(result.summary);
+      if (result.clarificationQuestion) contentParts.push(result.clarificationQuestion);
+      if (contentParts.length === 0) {
+        contentParts.push("No results found. Try adjusting your search criteria.");
+      }
 
       const noResultsMessage: Message = {
         id: Date.now().toString(),
         role: "assistant",
-        content: result.clarificationQuestion || result.summary || "No results found. Try adjusting your search criteria or using different values.",
-        plan: result.suggestedFilters ? {
+        content: contentParts.join("\n\n"),
+        smartFollowup: result,
+        questions: result.questions,
+        plan: result.suggestedFilters && result.suggestedFilters.length > 0 ? {
           table: selectedTable,
           page: 1,
           filters: result.suggestedFilters,
           needsClarification: true,
-          ambiguousColumns: result.suggestedFilters.map((f: any) => f.column),
+          ambiguousColumns: result.suggestedFilters.map((f) => f.column),
           summary: result.summary,
         } : undefined,
       };
 
       setMessages((prev) => [...prev, noResultsMessage]);
       setContext((prev) =>
-        prev + `\nNo results were found for the previous query. Assistant suggested: ${noResultsMessage.content}`
+        prev + `\nNo results were found. Issue: ${result.likelyIssue}. ${result.summary || ""}`
       );
     } catch (err) {
       const errorMessage: Message = {
@@ -169,17 +188,31 @@ export function NLQPanel({
       }
 
       const plan: NLQPlan = await response.json();
+      const action = plan.action || "plan";
 
-      if (plan.needsClarification && plan.clarificationQuestion) {
+      if (action === "clarify" || (plan.needsClarification && (plan.clarificationQuestion || plan.questions?.length))) {
+        const clarifyContent = plan.clarificationQuestion || plan.questions?.[0] || "I need more information to process your query.";
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           role: "assistant",
-          content: plan.clarificationQuestion,
+          content: clarifyContent,
+          plan: plan,
+          questions: plan.questions,
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+        setContext((prev) => 
+          prev + `\nUser asked: ${query.trim()}\nAssistant asked for clarification: ${clarifyContent}`
+        );
+      } else if (action === "suggest" && plan.suggestions?.length) {
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: plan.summary || "Here are some suggestions based on your query:",
           plan: plan,
         };
         setMessages((prev) => [...prev, assistantMessage]);
         setContext((prev) => 
-          prev + `\nUser asked: ${query.trim()}\nAssistant asked for clarification: ${plan.clarificationQuestion}`
+          prev + `\nUser asked: ${query.trim()}\nAssistant provided suggestions.`
         );
       } else {
         const summary = plan.summary || formatPlanSummary(plan);
@@ -188,6 +221,7 @@ export function NLQPanel({
           role: "assistant",
           content: summary,
           plan: plan,
+          explain: plan.explain,
         };
         setMessages((prev) => [...prev, assistantMessage]);
         setContext((prev) => 
@@ -214,7 +248,7 @@ export function NLQPanel({
       return "Showing all rows (no filters applied)";
     }
     const filterDescriptions = plan.filters.map(
-      (f) => `${f.column} ${OPERATOR_LABELS[f.op]} "${f.value}"`
+      (f) => `${f.column} ${OPERATOR_LABELS[f.op]} "${formatFilterValue(f.value)}"`
     );
     return `Filtering where ${filterDescriptions.join(" AND ")}`;
   };
@@ -244,7 +278,7 @@ export function NLQPanel({
       table: selectedTable,
       page: 1,
       filters: filters,
-      summary: `Applied suggested filters: ${filters.map(f => `${f.column} ${OPERATOR_LABELS[f.op]} "${f.value}"`).join(" AND ")}`,
+      summary: `Applied suggested filters: ${filters.map(f => `${f.column} ${OPERATOR_LABELS[f.op]} "${formatFilterValue(f.value)}"`).join(" AND ")}`,
     };
 
     const assistantMessage: Message = {
@@ -257,6 +291,11 @@ export function NLQPanel({
     setContext((prev) => prev + `\nApplied suggested filters: ${plan.summary}`);
     
     onQueryParsed(plan);
+  };
+
+  const handleQuestionClick = (question: string) => {
+    setQuery(question);
+    inputRef.current?.focus();
   };
 
   return (
@@ -304,16 +343,58 @@ export function NLQPanel({
                     }`}
                     data-testid={`message-${msg.role}-${msg.id}`}
                   >
-                    <div>{msg.content}</div>
+                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                    
                     {msg.plan && !msg.plan.needsClarification && msg.plan.filters.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-2">
                         {msg.plan.filters.map((f, idx) => (
                           <Badge key={idx} variant="secondary" className="font-mono text-xs">
-                            {f.column} {OPERATOR_LABELS[f.op]} "{f.value}"
+                            {f.column} {OPERATOR_LABELS[f.op]} "{formatFilterValue(f.value)}"
                           </Badge>
                         ))}
                       </div>
                     )}
+                    
+                    {msg.questions && msg.questions.length > 1 && (
+                      <div className="mt-2 space-y-1">
+                        <div className="text-xs text-muted-foreground">Or choose a question:</div>
+                        <div className="flex flex-wrap gap-1">
+                          {msg.questions.slice(1).map((q, idx) => (
+                            <Button
+                              key={idx}
+                              variant="outline"
+                              size="sm"
+                              className="h-6 text-xs"
+                              onClick={() => handleQuestionClick(q)}
+                              data-testid={`button-question-${idx}`}
+                            >
+                              {q.length > 40 ? q.slice(0, 40) + "..." : q}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {msg.plan?.suggestions && msg.plan.suggestions.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        <div className="text-xs text-muted-foreground">Try one of these:</div>
+                        <div className="flex flex-col gap-1">
+                          {msg.plan.suggestions.map((sug, idx) => (
+                            <Button
+                              key={idx}
+                              variant="outline"
+                              size="sm"
+                              className="h-auto py-1 px-2 text-xs justify-start"
+                              onClick={() => sug.filters && handleApplySuggestedFilters(sug.filters)}
+                              data-testid={`button-suggestion-${idx}`}
+                            >
+                              {sug.description}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
                     {msg.plan?.needsClarification && msg.plan.ambiguousColumns && msg.plan.ambiguousColumns.length > 0 && !msg.plan.filters?.length && (
                       <div className="flex flex-wrap gap-1 mt-2">
                         {msg.plan.ambiguousColumns.map((col) => (
@@ -330,6 +411,7 @@ export function NLQPanel({
                         ))}
                       </div>
                     )}
+                    
                     {msg.plan?.needsClarification && msg.plan.filters && msg.plan.filters.length > 0 && (
                       <div className="mt-2 space-y-2">
                         <div className="text-xs text-muted-foreground">Click to apply this suggestion:</div>
@@ -343,11 +425,32 @@ export function NLQPanel({
                           {msg.plan.filters.map((f, idx) => (
                             <span key={idx}>
                               {idx > 0 && " AND "}
-                              {f.column} {OPERATOR_LABELS[f.op]} "{f.value}"
+                              {f.column} {OPERATOR_LABELS[f.op]} "{formatFilterValue(f.value)}"
                             </span>
                           ))}
                         </Button>
                       </div>
+                    )}
+                    
+                    {msg.explain && (
+                      <Collapsible className="mt-2">
+                        <CollapsibleTrigger asChild>
+                          <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 p-0">
+                            <Info className="h-3 w-3" />
+                            Show how I interpreted this
+                            <ChevronDown className="h-3 w-3" />
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-1 text-xs text-muted-foreground bg-background/50 rounded p-2">
+                          <div>Table: {msg.explain.table}</div>
+                          {msg.explain.resolvedDateColumn && (
+                            <div>Date column: {msg.explain.resolvedDateColumn}</div>
+                          )}
+                          {msg.explain.timeframe && (
+                            <div>Timeframe: {msg.explain.timeframe.start} to {msg.explain.timeframe.end}</div>
+                          )}
+                        </CollapsibleContent>
+                      </Collapsible>
                     )}
                   </div>
                 </div>
@@ -400,7 +503,7 @@ export function NLQPanel({
             <div className="flex flex-wrap gap-1">
               {lastPlan.filters.map((f, idx) => (
                 <Badge key={idx} variant="secondary" className="font-mono text-xs">
-                  {f.column} {OPERATOR_LABELS[f.op]} "{f.value}"
+                  {f.column} {OPERATOR_LABELS[f.op]} "{formatFilterValue(f.value)}"
                 </Badge>
               ))}
             </div>

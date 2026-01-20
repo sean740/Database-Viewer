@@ -555,7 +555,7 @@ function ReportBlockCard({ block, onDelete }: { block: ReportBlock; onDelete: ()
           <div className="text-sm text-destructive text-center py-4">Failed to load data</div>
         ) : result?.type === "table" ? (
           <div className="overflow-x-auto">
-            <div className="max-h-80">
+            <div className="max-h-80 overflow-y-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b">

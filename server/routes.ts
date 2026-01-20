@@ -257,10 +257,12 @@ function parseTableName(tableName: string): { schema: string; table: string } | 
 }
 
 // Security: Validate table exists and user has access
+// bypassVisibility: When true, ignores visibility settings (used for AI access - visibility is cosmetic for UI only)
 async function validateTableAccess(
   dbName: string, 
   tableName: string, 
-  user: User
+  user: User,
+  options: { bypassVisibility?: boolean } = {}
 ): Promise<{ valid: boolean; error?: string; parsedTable?: { schema: string; table: string } }> {
   try {
     // Parse and validate table name (handles both "vendors" and "public.vendors")
@@ -280,24 +282,23 @@ async function validateTableAccess(
       return { valid: false, error: "Table not found" };
     }
 
-    // Check table visibility settings
-    const allSettings = await storage.getAllTableSettings();
-    const settingsKey = `${dbName}:${parsed.schema}.${parsed.table}`;
-    const tableSettings = allSettings[settingsKey];
-    
-    // For non-admin users, check visibility
-    if (user.role !== "admin") {
-      // Check if table is hidden
-      if (tableSettings && tableSettings.isVisible === false) {
+    // For external customers, always check grants (this is real permission, not cosmetic)
+    if (user.role === "external_customer") {
+      const allowedTables = await getAllowedTables(user.id);
+      if (!allowedTables.includes(`${dbName}:${parsed.schema}.${parsed.table}`)) {
         return { valid: false, error: "Access denied to this table" };
       }
+    }
+
+    // Visibility is cosmetic for UI only - AI bypasses this check
+    // Only apply visibility filtering for non-admin users when not bypassing
+    if (!options.bypassVisibility && user.role !== "admin") {
+      const allSettings = await storage.getAllTableSettings();
+      const settingsKey = `${dbName}:${parsed.schema}.${parsed.table}`;
+      const tableSettings = allSettings[settingsKey];
       
-      // For external customers, also check grants
-      if (user.role === "external_customer") {
-        const allowedTables = await getAllowedTables(user.id);
-        if (!allowedTables.includes(`${dbName}:${parsed.schema}.${parsed.table}`)) {
-          return { valid: false, error: "Access denied to this table" };
-        }
+      if (tableSettings && tableSettings.isVisible === false) {
+        return { valid: false, error: "Access denied to this table" };
       }
     }
 
@@ -410,10 +411,12 @@ async function validateColumns(
 }
 
 // Security: Validate report block config against database metadata
+// bypassVisibility: When true, ignores visibility settings (used for AI-generated blocks)
 async function validateBlockConfig(
   config: any, 
   kind: string,
-  user: User
+  user: User,
+  options: { bypassVisibility?: boolean } = {}
 ): Promise<{ valid: boolean; error?: string }> {
   if (kind === "text") {
     return { valid: true };
@@ -429,8 +432,8 @@ async function validateBlockConfig(
     return { valid: false, error: "Database not found" };
   }
 
-  // Validate table access
-  const tableValidation = await validateTableAccess(config.database, config.table, user);
+  // Validate table access (AI bypasses visibility, but external customer grants are still enforced)
+  const tableValidation = await validateTableAccess(config.database, config.table, user, options);
   if (!tableValidation.valid) {
     return tableValidation;
   }
@@ -451,7 +454,7 @@ async function validateBlockConfig(
   }
   
   if (config.join?.table) {
-    const joinTableValidation = await validateTableAccess(config.database, config.join.table, user);
+    const joinTableValidation = await validateTableAccess(config.database, config.join.table, user, options);
     if (!joinTableValidation.valid) {
       return { valid: false, error: `Join table access error: ${joinTableValidation.error}` };
     }
@@ -2712,19 +2715,22 @@ export async function registerRoutes(
           const allSettings = await storage.getAllTableSettings();
           let tables: Array<TableInfo & { columns: string[] }> = [];
           
+          // For external customers, get their allowed tables list once
+          const allowedTables = user.role === "external_customer" 
+            ? await getAllowedTables(userId) 
+            : null;
+          
           for (const t of tableResult.rows) {
             const fullName = `${t.schema}.${t.name}`;
             const settingsKey = `${dbConn.name}:${fullName}`;
             const isVisible = allSettings[settingsKey]?.isVisible ?? true;
             
-            // Skip hidden tables for non-admin users
-            if (user.role !== "admin" && !isVisible) continue;
+            // External customers are limited to their granted tables only
+            // (this is a real permission, not cosmetic visibility)
+            if (allowedTables && !allowedTables.includes(`${dbConn.name}:${fullName}`)) continue;
             
-            // For external customers, check grants
-            if (user.role === "external_customer") {
-              const allowedTables = await getAllowedTables(userId);
-              if (!allowedTables.includes(`${dbConn.name}:${fullName}`)) continue;
-            }
+            // NOTE: We do NOT skip tables based on isVisible for AI
+            // Visibility is cosmetic for the UI only - AI has full access to all tables
             
             // Fetch columns for this table
             const columnResult = await pool.query(`
@@ -2901,6 +2907,7 @@ Always be helpful and explain your suggestions in simple terms.`;
           const validKinds = ["table", "chart", "metric", "text"];
           
           // Helper function to validate a single block
+          // AI bypasses visibility settings - visibility is cosmetic for UI only
           const validateSingleBlock = async (block: any) => {
             if (!validKinds.includes(block.kind)) return null;
             
@@ -2911,7 +2918,8 @@ Always be helpful and explain your suggestions in simple terms.`;
               filters: block.config?.filters || [],
             };
             
-            const validation = await validateBlockConfig(config, block.kind, user);
+            // AI-generated blocks bypass visibility (external customer grants are still enforced)
+            const validation = await validateBlockConfig(config, block.kind, user, { bypassVisibility: true });
             
             if (validation.valid) {
               return {

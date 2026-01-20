@@ -69,6 +69,11 @@ filters.json       # Admin-configured filter definitions (per table)
 - **WashOS User**: Full data access, can manage External Customer grants
 - **External Customer**: Access only to specifically granted tables
 
+### Table Visibility vs. AI Access
+- **Visibility is cosmetic for UI only**: The "isVisible" setting in table settings controls whether a table appears in the UI dropdown for manual browsing
+- **AI has full access**: The AI assistant (NLQ and My Reports) can access ALL tables regardless of visibility settings - this allows users to query any data through natural language even if it's not shown in the UI table list
+- **External customer grants are always enforced**: External customers are still restricted to their granted tables in both UI and AI contexts
+
 ## API Endpoints
 
 | Method | Endpoint | Description |

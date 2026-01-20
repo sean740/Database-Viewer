@@ -1,0 +1,346 @@
+You are working inside an existing repo with this structure:
+
+Backend entry: server/index.ts
+
+All API endpoints live in: server/routes.ts
+
+Frontend NLQ UI: client/src/components/nlq-panel.tsx
+
+Frontend Reports UI: client/src/pages/my-reports.tsx
+
+Shared NLQ schema: shared/schema.ts (includes nlqPlanSchema)
+
+Report chat session DB model: shared/models/auth.ts (table report_chat_sessions)
+
+Existing filter storage: filters.json, filter_history.json, table_settings.json
+
+OpenAI client is initialized in server/routes.ts using:
+
+AI_INTEGRATIONS_OPENAI_API_KEY
+
+AI_INTEGRATIONS_OPENAI_BASE_URL
+
+Current AI endpoints in server/routes.ts:
+
+POST /api/nlq
+
+POST /api/nlq/smart-followup
+
+POST /api/reports/ai/chat
+
+Objective
+
+Upgrade the AI assistant logic to improve natural language understanding and reporting quality, and enable a truly conversational experience (clarifying questions when ambiguous, better context, better date handling, higher quality filters and report blocks), while keeping the app read-only (SELECT only).
+
+Do this in two phases (IMPORTANT)
+
+Phase 1 (required): Implement upgrades while preserving current behavior and existing response shapes.
+Phase 2 (optional): Refactor prompts and helper logic into new modules without changing API behavior.
+
+No breaking changes to routes or React pages unless also updating the corresponding client types and UI handling.
+
+REQUIRED HIGH-IMPACT CHANGES
+A) Add “Clarify vs Plan vs Suggest” action decision (NLQ + Report Chat)
+
+Currently NLQ returns a plan with optional needsClarification fields. Expand that idea consistently across:
+
+POST /api/nlq
+
+POST /api/reports/ai/chat
+
+Implement a new structured response object for both:
+
+action: "clarify" | "plan" | "suggest"
+
+If clarify: return 1–3 follow-up questions and do not guess
+
+If plan: return the final NLQ plan (or report block action)
+
+If suggest: return 2–5 recommended analyses (charts/metrics) relevant to selected table/report
+
+Implementation requirements
+
+Update shared/schema.ts:
+
+Extend nlqPlanSchema to include:
+
+action (enum)
+
+questions?: string[] (for clarify)
+
+explain?: { table, resolvedDateColumn, timeframe, filtersApplied, sortApplied, page, limit }
+
+Keep existing fields (needsClarification, etc.) for backward compatibility if needed.
+
+Update client/src/components/nlq-panel.tsx to:
+
+Render clarify questions naturally in chat
+
+Accept a user reply and resend it with prior state/context to /api/nlq
+
+Update client/src/pages/my-reports.tsx to:
+
+Render clarify questions from report AI
+
+Allow continuing the conversation naturally
+
+B) Add a “Data Dictionary” grounding layer (sample real data)
+
+Right now NLQ only sends column names/types. Upgrade the backend prompt context for:
+
+/api/nlq
+
+/api/reports/ai/chat
+
+For the selected table(s), compute and include:
+
+Column list with types (existing)
+
+Null rate per column (percent null)
+
+For timestamp/date columns: min/max date range
+
+For numeric columns: min/max + p50/p95
+
+For low-cardinality text columns (status/type/source): top 10 values + counts
+
+Performance requirements
+
+Implement caching per (database, schema.table) for 10–30 minutes
+
+Do not compute stats for ALL tables in report chat; start with:
+
+selected/primary table, and any explicitly joined tables only
+
+Add a hard cap on how many columns get heavy sampling to avoid expensive queries
+
+C) Semantic column “roles” mapping (Rails-aware)
+
+Build a simple mapping layer so the AI can choose roles like:
+
+event_time.created, event_time.updated, event_time.scheduled
+
+actor.customer, actor.vendor
+
+status.lifecycle
+
+money.amount
+
+Then backend resolves role -> actual column(s) using:
+
+Rails naming conventions (created_at, updated_at, *_id)
+
+column names/types
+
+data dictionary hints (e.g., which date column has the most non-null values)
+
+If ambiguous, AI should choose action: "clarify" and ask which date column or concept the user means.
+
+Keep Levenshtein only as a fallback for typos.
+
+D) First-class timeframe parsing + “between” support in NLQ
+
+Currently NLQ supports eq/contains/gt/gte/lt/lte and has a date ambiguity question. Upgrade NLQ to support:
+
+between operator for date ranges (like report builder already supports)
+
+structured timeframe object:
+
+{ start: "YYYY-MM-DD", end: "YYYY-MM-DD", timezone: "America/Los_Angeles", mode?: "rolling|calendar" }
+
+better handling of “last week”, “MTD/QTD/YTD”, “past 7 days”, “yesterday”, etc.
+
+Backend should:
+
+convert timeframe into between filter on the resolved date column
+
+if user did not specify which event time (created vs scheduled), prefer:
+
+map words in prompt (“scheduled/appointment” => scheduled_at if present; “created/added” => created_at)
+
+otherwise clarify
+
+E) Explain mode (build trust)
+
+For NLQ responses (and optionally report blocks), return an explain object that UI can render:
+
+resolved table
+
+resolved date column
+
+interpreted timeframe (start/end)
+
+filters applied
+
+sort/order applied
+
+page/limit
+
+Update nlq-panel.tsx to show an “Explain” expandable section.
+
+SMART FOLLOW-UP UPGRADES (/api/nlq/smart-followup)
+
+Implement a “recovery ladder” when 0 results:
+
+suggest case/spacing normalization (contains/ILIKE behavior)
+
+suggest synonyms from observed values (completed→done; canceled→cancelled) using sampled top values
+
+widen timeframe (only if user asked for narrow range)
+
+detect if chosen date column is mostly null and propose alternative
+
+suggest removing one filter at a time to isolate culprit
+
+Return structured JSON:
+
+likelyIssue (enum)
+
+suggestedChanges (array of proposed filter edits)
+
+questions (optional)
+
+evidence (top values/ranges you used)
+
+Update frontend NLQ panel to render these suggestions as clickable “Apply” actions.
+
+REPORT BUILDER CHAT UPGRADES (/api/reports/ai/chat)
+1) Add a “Report Brief” session memory (stored in report_chat_sessions)
+
+In shared/models/auth.ts / report_chat_sessions, add a new JSONB column:
+
+summary (or reportBrief) storing:
+
+selected table(s), preferred timeframe, metric definitions (“completed” means done), preferred dimensions, etc.
+
+If you cannot migrate DB easily, store it inside the existing messages array as a special system message, but prefer a real JSONB column if possible with drizzle migration.
+
+Use this brief to:
+
+ask clarifying questions early
+
+generate more consistent blocks
+
+preserve context beyond last 10 messages
+
+2) Scope schema context
+
+Stop sending “all tables with first 20 columns” as a single huge blob if it harms quality.
+Instead:
+
+include only visible tables list
+
+include full schema detail for:
+
+selected table(s)
+
+tables referenced by existing blocks
+
+tables referenced by join hints
+If the AI needs more schema detail, provide a small internal function (not a public endpoint) to fetch table/column info on demand.
+
+3) Structured action output
+
+Currently you regex-match JSON from assistant text. Change to:
+
+enforce strict JSON output for actions (no prose mixed in)
+
+if you still want the assistant to speak, return:
+
+assistantText separately from actionJSON
+
+OPENAI CALL IMPLEMENTATION (do this carefully)
+
+You are currently using client.chat.completions.create({ model: "gpt-4o", ... }).
+Upgrade to structured JSON outputs by doing one of these:
+
+If available in this environment, use OpenAI “Responses API” style structured outputs.
+
+If not, emulate structured outputs by:
+
+strongly instructing “return JSON only”
+
+validate with Zod (shared/schema.ts) and retry once on validation failure
+Do NOT ship code that silently accepts malformed JSON.
+
+Use the existing env vars:
+
+AI_INTEGRATIONS_OPENAI_API_KEY
+
+AI_INTEGRATIONS_OPENAI_BASE_URL
+
+Keep temperatures:
+
+NLQ: 0.1
+
+Smart follow-up: 0.3
+
+Report chat: reduce from 0.7 to 0.5 for more focused configs
+
+REFACTOR TARGETS (Phase 2, but do it if time allows without breaking)
+
+Create new modules:
+
+server/ai/openai.ts
+
+exports getOpenAIClient() so routes.ts is thinner
+
+server/ai/data-dictionary.ts
+
+functions to compute + cache:
+
+null rates, top values, date ranges, numeric ranges
+
+server/ai/roles.ts
+
+role inference + resolution helpers (Rails-aware)
+
+server/ai/prompts.ts
+
+centralized prompt builders for:
+
+NLQ (clarify/plan/suggest)
+
+smart follow-up
+
+report builder chat
+
+server/ai/validators.ts
+
+shared validation for AI outputs (Zod + retry-once policy)
+
+Then update server/routes.ts to call these modules.
+
+DELIVERABLES
+
+Updated backend code implementing all required changes:
+
+modify /api/nlq, /api/nlq/smart-followup, /api/reports/ai/chat in server/routes.ts
+
+add the new server/ai/* modules
+
+extend shared Zod schemas in shared/schema.ts
+
+update any related types in client/src/lib/types.ts if necessary
+
+Updated frontend:
+
+client/src/components/nlq-panel.tsx to support clarify questions, apply suggestions, and explain mode
+
+client/src/pages/my-reports.tsx to support clarify questions and improved AI flow
+
+Preserve read-only behavior and existing permission checks.
+
+Before finalizing, run TypeScript build checks and ensure all endpoints still work.
+
+How you should run the work
+
+First, implement minimal changes inside server/routes.ts to prove behavior.
+
+Then refactor into server/ai/* modules.
+
+Do not rewrite unrelated parts of the app.
+
+Add clear comments for where data dictionary queries could be expensive and how caching works.
+
+Now implement these changes directly in this repo.

@@ -2954,6 +2954,15 @@ For table blocks with JOINS (to pull data from related tables):
 - Example join config: { "table": "public.vendors", "on": ["vendor_id", "id"] }
 - Check the column list for the joined table before constructing joined.column_name references
 
+For NESTED JOINS (sub-joins) when you need to traverse through two tables:
+- Add a "subJoin" object inside the "join" object to join from the first joined table to a third table
+- subJoin has: table (the third table like "public.districts"), on (array of [fromColumnInJoinTable, toColumnInSubJoinTable])
+- For columns from the sub-joined table, use prefix "joined_" followed by the table name, like "joined_districts.name" or "joined_district.name"
+- Example: To get district name from bookings -> addresses -> districts:
+  { "join": { "table": "public.addresses", "on": ["address_id", "id"], "subJoin": { "table": "public.districts", "on": ["district_id", "id"] } } }
+  Then use columns like "joined_district.name" to get the district name (NOT "label" - use the EXACT column name from districts table which is "name")
+- CRITICAL: Always check the AVAILABLE TABLES list above for the exact column names in the sub-joined table
+
 For chart blocks, config should have: database, table, chartType, xColumn (the date/timestamp column to group by), yColumn (the column to aggregate), aggregateFunction, groupBy (can be a column name OR one of: "month", "year", "day", "week", "quarter" for date-based grouping), filters, rowLimit
 For metric blocks, config should have: database, table, column, aggregateFunction, filters, label, format
 

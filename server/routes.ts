@@ -2165,7 +2165,8 @@ export async function registerRoutes(
       }
 
       // Security: Comprehensive validation of block config
-      const validation = await validateBlockConfig(config, kind, user);
+      // My Reports is AI-assisted, so bypass visibility - visibility is cosmetic for UI only
+      const validation = await validateBlockConfig(config, kind, user, { bypassVisibility: true });
       if (!validation.valid) {
         return res.status(400).json({ error: validation.error });
       }
@@ -2230,8 +2231,9 @@ export async function registerRoutes(
       }
 
       // Security: Validate config if provided
+      // My Reports is AI-assisted, so bypass visibility - visibility is cosmetic for UI only
       if (config) {
-        const validation = await validateBlockConfig(config, block.kind, user);
+        const validation = await validateBlockConfig(config, block.kind, user, { bypassVisibility: true });
         if (!validation.valid) {
           return res.status(400).json({ error: validation.error });
         }
@@ -2350,7 +2352,8 @@ export async function registerRoutes(
       const config = block.config as TableBlockConfig | ChartBlockConfig | MetricBlockConfig;
       
       // Security: Comprehensive validation before executing any query
-      const validation = await validateBlockConfig(config, block.kind, user);
+      // My Reports is AI-assisted, so bypass visibility - visibility is cosmetic for UI only
+      const validation = await validateBlockConfig(config, block.kind, user, { bypassVisibility: true });
       if (!validation.valid) {
         // Distinguish between permission errors (403) and validation errors (400)
         const statusCode = validation.error?.includes("Access denied") ? 403 : 400;

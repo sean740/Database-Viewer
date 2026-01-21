@@ -583,6 +583,7 @@ async function validateBlockConfig(
         const suggestionText = suggestions.length > 0 
           ? ` Did you mean: ${suggestions.map(s => `'${s}'`).join(", ")}?`
           : "";
+        console.log(`[DEBUG] Join validation failed - Looking for column '${col}' in joined table '${config.join?.table}'. Available columns: [${joinTableColumns.join(', ')}]`);
         return { valid: false, error: `Column not found in joined table: ${col}.${suggestionText}` };
       }
     }

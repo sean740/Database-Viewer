@@ -25,7 +25,7 @@ export const nlqExplainSchema = z.object({
   filtersApplied: z.array(z.object({
     column: z.string(),
     operator: z.string(),
-    value: z.string(),
+    value: z.union([z.string(), z.array(z.string())]),
     interpretation: z.string().optional(),
   })).optional(),
   sortApplied: z.object({

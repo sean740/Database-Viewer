@@ -453,6 +453,9 @@ async function validateBlockConfig(
     mainTableColumns = mainColResult.rows.map((r: any) => r.column_name);
   }
   
+  // Track sub-join table columns separately
+  let subJoinTableColumns: string[] = [];
+  
   if (config.join?.table) {
     const joinTableValidation = await validateTableAccess(config.database, config.join.table, user, options);
     if (!joinTableValidation.valid) {
@@ -484,39 +487,81 @@ async function validateBlockConfig(
       if (!joinTableColumns.includes(toCol)) {
         return { valid: false, error: `Join column '${toCol}' not found in joined table` };
       }
+      
+      // Handle subJoin if present (nested join: main -> join -> subJoin)
+      if (config.join.subJoin?.table) {
+        const subJoinTableValidation = await validateTableAccess(config.database, config.join.subJoin.table, user, options);
+        if (!subJoinTableValidation.valid) {
+          return { valid: false, error: `SubJoin table access error: ${subJoinTableValidation.error}` };
+        }
+        
+        // Validate subJoin "on" columns
+        if (!config.join.subJoin.on || config.join.subJoin.on.length !== 2) {
+          return { valid: false, error: "SubJoin 'on' must specify two columns [fromColumn, toColumn]" };
+        }
+        
+        const [subFromCol, subToCol] = config.join.subJoin.on;
+        // subFromCol should exist in the first join table
+        if (!joinTableColumns.includes(subFromCol)) {
+          return { valid: false, error: `SubJoin column '${subFromCol}' not found in join table` };
+        }
+        
+        // Get columns from subJoin table
+        const subJoinParsed = parseTableName(config.join.subJoin.table);
+        if (subJoinParsed) {
+          const subJoinColResult = await pool.query(`
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_schema = $1 AND table_name = $2
+          `, [subJoinParsed.schema, subJoinParsed.table]);
+          subJoinTableColumns = subJoinColResult.rows.map((r: any) => r.column_name);
+          
+          // Validate the subToColumn exists in subJoin table
+          if (!subJoinTableColumns.includes(subToCol)) {
+            return { valid: false, error: `SubJoin column '${subToCol}' not found in subJoin table` };
+          }
+        }
+      }
     }
   }
 
   // Helper to validate dotted column reference format
-  const validateDottedColumn = (col: string): { valid: boolean; colName?: string; error?: string } => {
+  // Returns isSubJoin=true if prefix contains "district", "sub", etc. indicating subJoin table
+  const validateDottedColumn = (col: string): { valid: boolean; colName?: string; isSubJoin?: boolean; error?: string } => {
     const parts = col.split(".");
     if (parts.length !== 2) {
       return { valid: false, error: `Invalid column reference '${col}': must be 'alias.column' format with exactly one dot` };
     }
-    const [, colName] = parts;
+    const [prefix, colName] = parts;
     if (!colName || !isValidIdentifier(colName)) {
       return { valid: false, error: `Invalid column name in '${col}'` };
     }
     if (!config.join) {
       return { valid: false, error: `Cannot use join column reference '${col}' without a join configuration` };
     }
-    return { valid: true, colName };
+    // Check if this references the subJoin table (prefixes like "joined_district", "sub_", etc.)
+    const isSubJoin = prefix.includes("_") || prefix.toLowerCase().includes("district") || prefix.toLowerCase().includes("sub");
+    return { valid: true, colName, isSubJoin };
   };
 
   // Collect all columns that need validation
   const columnsToValidate: string[] = [];
   const joinColumnsToValidate: string[] = [];
+  const subJoinColumnsToValidate: string[] = [];
 
   if (kind === "table" && config.columns?.length > 0) {
     // Separate main table columns from join table columns
     for (const col of config.columns) {
       if (col.includes(".")) {
-        // Column from joined table (e.g., "joined.email")
+        // Column from joined table (e.g., "joined.email" or "joined_district.name")
         const result = validateDottedColumn(col);
         if (!result.valid) {
           return { valid: false, error: result.error };
         }
-        joinColumnsToValidate.push(result.colName!);
+        if (result.isSubJoin && config.join?.subJoin) {
+          subJoinColumnsToValidate.push(result.colName!);
+        } else {
+          joinColumnsToValidate.push(result.colName!);
+        }
       } else {
         columnsToValidate.push(col);
       }
@@ -528,7 +573,11 @@ async function validateBlockConfig(
       if (!result.valid) {
         return { valid: false, error: result.error };
       }
-      joinColumnsToValidate.push(result.colName!);
+      if (result.isSubJoin && config.join?.subJoin) {
+        subJoinColumnsToValidate.push(result.colName!);
+      } else {
+        joinColumnsToValidate.push(result.colName!);
+      }
     } else {
       columnsToValidate.push(config.orderBy.column);
     }
@@ -556,7 +605,11 @@ async function validateBlockConfig(
           if (!result.valid) {
             return { valid: false, error: result.error };
           }
-          joinColumnsToValidate.push(result.colName!);
+          if (result.isSubJoin && config.join?.subJoin) {
+            subJoinColumnsToValidate.push(result.colName!);
+          } else {
+            joinColumnsToValidate.push(result.colName!);
+          }
         } else {
           columnsToValidate.push(f.column);
         }
@@ -585,6 +638,20 @@ async function validateBlockConfig(
           : "";
         console.log(`[DEBUG] Join validation failed - Looking for column '${col}' in joined table '${config.join?.table}'. Available columns: [${joinTableColumns.join(', ')}]`);
         return { valid: false, error: `Column not found in joined table: ${col}.${suggestionText}` };
+      }
+    }
+  }
+  
+  // Validate sub-join table columns exist
+  if (subJoinColumnsToValidate.length > 0 && subJoinTableColumns.length > 0) {
+    for (const col of subJoinColumnsToValidate) {
+      if (!subJoinTableColumns.includes(col)) {
+        const suggestions = findSimilarColumns(col, subJoinTableColumns);
+        const suggestionText = suggestions.length > 0 
+          ? ` Did you mean: ${suggestions.map(s => `'${s}'`).join(", ")}?`
+          : "";
+        console.log(`[DEBUG] SubJoin validation failed - Looking for column '${col}' in subJoin table '${config.join?.subJoin?.table}'. Available columns: [${subJoinTableColumns.join(', ')}]`);
+        return { valid: false, error: `Column not found in subJoin table: ${col}.${suggestionText}` };
       }
     }
   }
@@ -2377,16 +2444,27 @@ export async function registerRoutes(
         const tableConfig = config as TableBlockConfig;
         const mainAlias = "t1";
         const joinAlias = "t2";
+        const subJoinAlias = "t3";
+        
+        // Helper to determine if a column reference is for subJoin table
+        const isSubJoinColumn = (prefix: string): boolean => {
+          return prefix.includes("_") || prefix.toLowerCase().includes("district") || prefix.toLowerCase().includes("sub");
+        };
         
         // Build column list with proper table aliases for joins
         let columns: string;
         if (tableConfig.columns?.length > 0) {
           columns = tableConfig.columns.map(c => {
             if (c.includes(".")) {
-              // Column from joined table (e.g., "vendors.email")
-              const [, colName] = c.split(".");
+              // Column from joined table (e.g., "joined.email" or "joined_district.name")
+              const [prefix, colName] = c.split(".");
               validateIdentifier(colName, "column");
-              return `${joinAlias}."${colName}" AS "${c.replace(".", "_")}"`;
+              // Determine which join table this column belongs to
+              if (isSubJoinColumn(prefix) && tableConfig.join?.subJoin) {
+                return `${subJoinAlias}."${colName}" AS "${c.replace(".", "_")}"`;
+              } else {
+                return `${joinAlias}."${colName}" AS "${c.replace(".", "_")}"`;
+              }
             } else {
               validateIdentifier(c, "column");
               return `${mainAlias}."${c}"`;
@@ -2410,6 +2488,20 @@ export async function registerRoutes(
           validateIdentifier(fromCol, "column");
           validateIdentifier(toCol, "column");
           query += ` ${joinType} ${joinTableRef} AS ${joinAlias} ON ${mainAlias}."${fromCol}" = ${joinAlias}."${toCol}"`;
+          
+          // Add subJoin if specified (nested join: main -> join -> subJoin)
+          if (tableConfig.join.subJoin?.table) {
+            const subJoinParsed = parseTableName(tableConfig.join.subJoin.table);
+            if (!subJoinParsed) {
+              return res.status(400).json({ error: "Invalid subJoin table name" });
+            }
+            const subJoinTableRef = `"${subJoinParsed.schema}"."${subJoinParsed.table}"`;
+            const subJoinType = tableConfig.join.subJoin.type === "inner" ? "INNER JOIN" : "LEFT JOIN";
+            const [subFromCol, subToCol] = tableConfig.join.subJoin.on;
+            validateIdentifier(subFromCol, "column");
+            validateIdentifier(subToCol, "column");
+            query += ` ${subJoinType} ${subJoinTableRef} AS ${subJoinAlias} ON ${joinAlias}."${subFromCol}" = ${subJoinAlias}."${subToCol}"`;
+          }
         }
         
         // Add filters (handle join columns with dots)
@@ -2418,10 +2510,14 @@ export async function registerRoutes(
           tableConfig.filters.forEach((f) => {
             let columnRef: string;
             if (f.column.includes(".")) {
-              // Column from joined table (e.g., "joined.status")
-              const [, colName] = f.column.split(".");
+              // Column from joined table (e.g., "joined.status" or "joined_district.name")
+              const [prefix, colName] = f.column.split(".");
               validateIdentifier(colName, "column");
-              columnRef = `${joinAlias}."${colName}"`;
+              if (isSubJoinColumn(prefix) && tableConfig.join?.subJoin) {
+                columnRef = `${subJoinAlias}."${colName}"`;
+              } else {
+                columnRef = `${joinAlias}."${colName}"`;
+              }
             } else {
               validateIdentifier(f.column, "column");
               columnRef = `${mainAlias}."${f.column}"`;
@@ -2441,6 +2537,17 @@ export async function registerRoutes(
             const joinType = tableConfig.join.type === "inner" ? "INNER JOIN" : "LEFT JOIN";
             const [fromCol, toCol] = tableConfig.join.on;
             baseQuery += ` ${joinType} ${joinTableRef} AS ${joinAlias} ON ${mainAlias}."${fromCol}" = ${joinAlias}."${toCol}"`;
+            
+            // Add subJoin to base query if specified
+            if (tableConfig.join.subJoin?.table) {
+              const subJoinParsed = parseTableName(tableConfig.join.subJoin.table);
+              if (subJoinParsed) {
+                const subJoinTableRef = `"${subJoinParsed.schema}"."${subJoinParsed.table}"`;
+                const subJoinType = tableConfig.join.subJoin.type === "inner" ? "INNER JOIN" : "LEFT JOIN";
+                const [subFromCol, subToCol] = tableConfig.join.subJoin.on;
+                baseQuery += ` ${subJoinType} ${subJoinTableRef} AS ${subJoinAlias} ON ${joinAlias}."${subFromCol}" = ${subJoinAlias}."${subToCol}"`;
+              }
+            }
           }
         }
         if (tableConfig.filters?.length > 0) {
@@ -2458,9 +2565,13 @@ export async function registerRoutes(
         if (tableConfig.orderBy) {
           let orderColumnRef: string;
           if (tableConfig.orderBy.column.includes(".")) {
-            const [, colName] = tableConfig.orderBy.column.split(".");
+            const [prefix, colName] = tableConfig.orderBy.column.split(".");
             validateIdentifier(colName, "column");
-            orderColumnRef = `${joinAlias}."${colName}"`;
+            if (isSubJoinColumn(prefix) && tableConfig.join?.subJoin) {
+              orderColumnRef = `${subJoinAlias}."${colName}"`;
+            } else {
+              orderColumnRef = `${joinAlias}."${colName}"`;
+            }
           } else {
             validateIdentifier(tableConfig.orderBy.column, "column");
             orderColumnRef = `${mainAlias}."${tableConfig.orderBy.column}"`;

@@ -104,12 +104,20 @@ export const reportBlocks = pgTable("report_blocks", {
 export type ReportBlock = typeof reportBlocks.$inferSelect;
 export type InsertReportBlock = typeof reportBlocks.$inferInsert;
 
+// Sub-join configuration for nested joins (e.g., bookings -> addresses -> districts)
+export interface SubJoinConfig {
+  table: string; // The table to join from the first join table
+  on: [string, string]; // [fromColumn, toColumn] - column in first join table to column in this table
+  type?: "inner" | "left"; // Join type, defaults to "left"
+}
+
 // Join configuration for report blocks
 export interface JoinConfig {
   table: string; // The table to join (e.g., "public.vendors")
   on: [string, string]; // [fromColumn, toColumn] - e.g., ["vendor_id", "id"]
   type?: "inner" | "left"; // Join type, defaults to "left"
   columns?: string[]; // Columns to select from joined table
+  subJoin?: SubJoinConfig; // Optional nested join from this joined table to another table
 }
 
 // Report block configuration types

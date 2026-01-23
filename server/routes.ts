@@ -3407,11 +3407,13 @@ Always be helpful and explain your suggestions in simple terms.`;
               AND b.status = 'done'
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total_revenue: 0, total_margin: 0 }] })),
           
-          // 14. Member Bookings (bookings from subscription_usages)
+          // 14. Member Bookings (unique completed bookings from subscription_usages)
           pool.query(`
-            SELECT COUNT(*) as count
-            FROM public.subscription_usages
-            WHERE created_at >= $1 AND created_at < $2
+            SELECT COUNT(DISTINCT su.booking_id) as count
+            FROM public.subscription_usages su
+            INNER JOIN public.bookings b ON b.id = su.booking_id
+            WHERE su.created_at >= $1 AND su.created_at < $2
+              AND b.status = 'done'
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ count: 0 }] })),
           
           // 16. New Membership Signups

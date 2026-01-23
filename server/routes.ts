@@ -3297,23 +3297,25 @@ Always be helpful and explain your suggestions in simple terms.`;
         const startDateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}T00:00:00${startOffset}`;
         const weekStartUTC = new Date(startDateStr).toISOString();
         
-        // Week end is 6 days later (Sunday) at 23:59:59
-        const weekEndDate = new Date(currentYear, currentMonth, currentDay + 6);
+        // Week end is 7 days later (next Monday at midnight) for exclusive upper bound
+        // This ensures we capture all of Sunday (the 7th day of the week)
+        const weekEndDate = new Date(currentYear, currentMonth, currentDay + 7);
         const endYear = weekEndDate.getFullYear();
         const endMonth = weekEndDate.getMonth();
         const endDay = weekEndDate.getDate();
         const endOffset = getPSTOffset(weekEndDate);
-        const endDateStr = `${endYear}-${String(endMonth + 1).padStart(2, '0')}-${String(endDay).padStart(2, '0')}T23:59:59${endOffset}`;
+        const endDateStr = `${endYear}-${String(endMonth + 1).padStart(2, '0')}-${String(endDay).padStart(2, '0')}T00:00:00${endOffset}`;
         const weekEndUTC = new Date(endDateStr).toISOString();
         
         // If week start is past today, stop
         if (new Date(weekStartUTC) > now) break;
         
-        // Format label as "Dec 29 - Jan 4"
+        // Format label as "Dec 29 - Jan 4" (use Sunday, which is 6 days after Monday start)
+        const labelEndDate = new Date(currentYear, currentMonth, currentDay + 6); // Sunday
         const startMonthLabel = weekStartDate.toLocaleDateString("en-US", { month: "short" });
         const startDayLabel = weekStartDate.getDate();
-        const endMonthLabel = weekEndDate.toLocaleDateString("en-US", { month: "short" });
-        const endDayLabel = weekEndDate.getDate();
+        const endMonthLabel = labelEndDate.toLocaleDateString("en-US", { month: "short" });
+        const endDayLabel = labelEndDate.getDate();
         
         const label = startMonthLabel === endMonthLabel 
           ? `${startMonthLabel} ${startDayLabel} - ${endDayLabel}`

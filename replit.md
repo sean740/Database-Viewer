@@ -104,11 +104,12 @@ filters.json       # Admin-configured filter definitions (per table)
 - Week boundaries: Monday 00:00:00 PST to next Monday 00:00:00 PST (exclusive)
 
 #### Revenue Calculation Details
-- **Total Revenue** = Booking Revenue + Subscription Fees + Customer Fees + Tips + Credit Packs
+- **Total Revenue** = Booking Revenue + Subscription Fees + Customer Fees + Tips + Credit Packs - Refunds
   - Subscription Fees: price_plan_id 11=$96, 10=$9.99, others=$0
   - Tips: Sum of `tip_amount` from `booking_tips` where tip's `created_at` is in the week
   - Credit Packs: Sum of `pay_amount` from `credits_packs` joined with `user_credits_transactions` (type_id=16) on `amount=get_amount`
-- **Gross Profit** = Booking Margin + Subscription Fees + Customer Fees + Tip Profit
+  - Refunds: Sum of `total` from `booking_refunds` where `created_at` is in the week
+- **Gross Profit** = Booking Margin + Subscription Fees + Customer Fees + Tip Profit - Refunds
   - Tip Profit: `tip_amount - vendor_amount` from `booking_tips`
 - **New Users (w/Booking)**: Users who signed up in the week AND have at least one booking ever (any time)
 

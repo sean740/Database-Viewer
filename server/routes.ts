@@ -3353,6 +3353,7 @@ Always be helpful and explain your suggestions in simple terms.`;
           customerFeesResult,
           tipsResult,
           creditPacksResult,
+          refundsResult,
         ] = await Promise.all([
           // 1. Bookings Created (created_at in week)
           pool.query(`
@@ -3484,6 +3485,13 @@ Always be helpful and explain your suggestions in simple terms.`;
                 AND uct.user_credits_transaction_type_id = 16
             ) unique_transactions
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+          
+          // Refunds from booking_refunds (created_at in week) - subtract from total revenue
+          pool.query(`
+            SELECT COALESCE(SUM(total), 0) as total
+            FROM public.booking_refunds
+            WHERE created_at >= $1 AND created_at < $2
+          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
         ]);
         
         const bookingsCreated = parseInt(bookingsCreatedResult.rows[0]?.count || "0");
@@ -3503,22 +3511,24 @@ Always be helpful and explain your suggestions in simple terms.`;
         const tipRevenue = parseFloat(tipsResult.rows[0]?.tip_revenue || "0");
         const tipProfit = parseFloat(tipsResult.rows[0]?.tip_profit || "0");
         const creditPackRevenue = parseFloat(creditPacksResult.rows[0]?.total || "0");
+        const refundsTotal = parseFloat(refundsResult.rows[0]?.total || "0");
         
         // Subscription Revenue = subscription booking revenue + subscription fees
         // Note: subscriptionBookingRevenue is already included in bookingRevenue (member bookings are a subset of all bookings)
         const subscriptionRevenue = subscriptionBookingRevenue + subscriptionFees;
         
-        // Total Revenue = booking revenue + subscription fees + customer fees + tips + credit packs
+        // Total Revenue = booking revenue + subscription fees + customer fees + tips + credit packs - refunds
         // (subscriptionBookingRevenue is already part of bookingRevenue, so we only add subscriptionFees)
-        const totalRevenue = bookingRevenue + subscriptionFees + customerFees + tipRevenue + creditPackRevenue;
+        const totalRevenue = bookingRevenue + subscriptionFees + customerFees + tipRevenue + creditPackRevenue - refundsTotal;
         
         // Debug logging for revenue validation
-        console.log(`[REVENUE DEBUG] ${week.label}: Booking=$${bookingRevenue.toFixed(2)}, SubFees=$${subscriptionFees.toFixed(2)}, CustFees=$${customerFees.toFixed(2)}, Tips=$${tipRevenue.toFixed(2)}, CreditPacks=$${creditPackRevenue.toFixed(2)}, TOTAL=$${totalRevenue.toFixed(2)}`);
+        console.log(`[REVENUE DEBUG] ${week.label}: Booking=$${bookingRevenue.toFixed(2)}, SubFees=$${subscriptionFees.toFixed(2)}, CustFees=$${customerFees.toFixed(2)}, Tips=$${tipRevenue.toFixed(2)}, CreditPacks=$${creditPackRevenue.toFixed(2)}, Refunds=$${refundsTotal.toFixed(2)}, TOTAL=$${totalRevenue.toFixed(2)}`);
         
-        // Gross Profit = booking margin + subscription fees (100% margin) + customer fees (100% margin) + tip profit
+        // Gross Profit = booking margin + subscription fees (100% margin) + customer fees (100% margin) + tip profit - refunds
         // (subscriptionBookingProfit is already part of bookingProfit, so we don't add it again)
         // Credit packs are 100% revenue, 0% profit (or needs separate margin - currently not adding to profit)
-        const totalProfit = bookingProfit + subscriptionFees + customerFees + tipProfit;
+        // Refunds reduce profit by the full refund amount
+        const totalProfit = bookingProfit + subscriptionFees + customerFees + tipProfit - refundsTotal;
         const marginPercent = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
         
         const signups = parseInt(signupsResult.rows[0]?.count || "0");

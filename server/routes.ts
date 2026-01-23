@@ -3351,6 +3351,8 @@ Always be helpful and explain your suggestions in simple terms.`;
           newSubscriptionsResult,
           memberBookingsRevenueResult,
           customerFeesResult,
+          tipsResult,
+          creditPacksResult,
         ] = await Promise.all([
           // 1. Bookings Created (created_at in week)
           pool.query(`
@@ -3460,6 +3462,24 @@ Always be helpful and explain your suggestions in simple terms.`;
             FROM public.customer_fees
             WHERE created_at >= $1 AND created_at < $2
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+          
+          // Tips from booking_tips where tip was created in the week
+          pool.query(`
+            SELECT 
+              COALESCE(SUM(tip_amount), 0) as tip_revenue,
+              COALESCE(SUM(tip_amount - vendor_amount), 0) as tip_profit
+            FROM public.booking_tips
+            WHERE created_at >= $1 AND created_at < $2
+          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ tip_revenue: 0, tip_profit: 0 }] })),
+          
+          // Credit packs purchased in the week (user_credits_transactions with type_id=16, joined with credits_packs)
+          pool.query(`
+            SELECT COALESCE(SUM(cp.pay_amount), 0) as total
+            FROM public.user_credits_transactions uct
+            INNER JOIN public.credits_packs cp ON uct.amount = cp.get_amount
+            WHERE uct.created_at >= $1 AND uct.created_at < $2
+              AND uct.user_credits_transaction_type_id = 16
+          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
         ]);
         
         const bookingsCreated = parseInt(bookingsCreatedResult.rows[0]?.count || "0");
@@ -3476,18 +3496,22 @@ Always be helpful and explain your suggestions in simple terms.`;
         const subscriptionBookingProfit = parseFloat(subscriptionRevenueResult.rows[0]?.total_margin || "0");
         const subscriptionFees = parseFloat(subscriptionFeesResult.rows[0]?.total || "0");
         const customerFees = parseFloat(customerFeesResult.rows[0]?.total || "0");
+        const tipRevenue = parseFloat(tipsResult.rows[0]?.tip_revenue || "0");
+        const tipProfit = parseFloat(tipsResult.rows[0]?.tip_profit || "0");
+        const creditPackRevenue = parseFloat(creditPacksResult.rows[0]?.total || "0");
         
         // Subscription Revenue = subscription booking revenue + subscription fees
         // Note: subscriptionBookingRevenue is already included in bookingRevenue (member bookings are a subset of all bookings)
         const subscriptionRevenue = subscriptionBookingRevenue + subscriptionFees;
         
-        // Total Revenue = booking revenue + subscription fees + customer fees
+        // Total Revenue = booking revenue + subscription fees + customer fees + tips + credit packs
         // (subscriptionBookingRevenue is already part of bookingRevenue, so we only add subscriptionFees)
-        const totalRevenue = bookingRevenue + subscriptionFees + customerFees;
+        const totalRevenue = bookingRevenue + subscriptionFees + customerFees + tipRevenue + creditPackRevenue;
         
-        // Gross Profit = booking margin + subscription fees (100% margin) + customer fees (100% margin)
+        // Gross Profit = booking margin + subscription fees (100% margin) + customer fees (100% margin) + tip profit
         // (subscriptionBookingProfit is already part of bookingProfit, so we don't add it again)
-        const totalProfit = bookingProfit + subscriptionFees + customerFees;
+        // Credit packs are 100% revenue, 0% profit (or needs separate margin - currently not adding to profit)
+        const totalProfit = bookingProfit + subscriptionFees + customerFees + tipProfit;
         const marginPercent = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
         
         const signups = parseInt(signupsResult.rows[0]?.count || "0");

@@ -3477,13 +3477,16 @@ Always be helpful and explain your suggestions in simple terms.`;
         const customerFees = parseFloat(customerFeesResult.rows[0]?.total || "0");
         
         // Subscription Revenue = subscription booking revenue + subscription fees
+        // Note: subscriptionBookingRevenue is already included in bookingRevenue (member bookings are a subset of all bookings)
         const subscriptionRevenue = subscriptionBookingRevenue + subscriptionFees;
         
-        // Total Revenue = booking revenue + subscription revenue + customer fees
-        const totalRevenue = bookingRevenue + subscriptionRevenue + customerFees;
+        // Total Revenue = booking revenue + subscription fees + customer fees
+        // (subscriptionBookingRevenue is already part of bookingRevenue, so we only add subscriptionFees)
+        const totalRevenue = bookingRevenue + subscriptionFees + customerFees;
         
-        // Gross Profit = booking margin + subscription booking margin + subscription fees (100% margin) + customer fees (100% margin)
-        const totalProfit = bookingProfit + subscriptionBookingProfit + subscriptionFees + customerFees;
+        // Gross Profit = booking margin + subscription fees (100% margin) + customer fees (100% margin)
+        // (subscriptionBookingProfit is already part of bookingProfit, so we don't add it again)
+        const totalProfit = bookingProfit + subscriptionFees + customerFees;
         const marginPercent = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
         
         const signups = parseInt(signupsResult.rows[0]?.count || "0");

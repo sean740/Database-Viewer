@@ -1404,8 +1404,27 @@ export async function registerRoutes(
 
         const op = getOperatorSQL(filter.operator, paramIndex);
         whereClauses.push(`"${filter.column}" ${op.sql}`);
-        params.push(op.transform ? op.transform(filter.value) : filter.value);
-        paramIndex++;
+        
+        // Handle between operator (needs 2 params) and date conversion
+        if (filter.operator === "between" && Array.isArray(filter.value)) {
+          const startValue = convertPSTDateToUTC(filter.value[0], false);
+          const endValue = convertPSTDateToUTC(filter.value[1], true);
+          params.push(startValue, endValue);
+          paramIndex += 2;
+        } else if (["gt", "gte", "lt", "lte", "eq"].includes(filter.operator) && typeof filter.value === "string") {
+          // Check if this looks like a date filter
+          const dateMatch = filter.value.match(/^\d{4}-\d{2}-\d{2}$/);
+          if (dateMatch) {
+            const converted = convertPSTDateToUTC(filter.value, filter.operator === "lte" || filter.operator === "lt");
+            params.push(op.transform ? op.transform(converted) : converted);
+          } else {
+            params.push(op.transform ? op.transform(filter.value) : filter.value);
+          }
+          paramIndex++;
+        } else {
+          params.push(op.transform ? op.transform(filter.value) : filter.value);
+          paramIndex++;
+        }
       }
 
       const whereSQL =
@@ -1506,8 +1525,27 @@ export async function registerRoutes(
         }
         const op = getOperatorSQL(filter.operator, paramIndex);
         whereClauses.push(`"${filter.column}" ${op.sql}`);
-        params.push(op.transform ? op.transform(filter.value) : filter.value);
-        paramIndex++;
+        
+        // Handle between operator (needs 2 params) and date conversion
+        if (filter.operator === "between" && Array.isArray(filter.value)) {
+          const startValue = convertPSTDateToUTC(filter.value[0], false);
+          const endValue = convertPSTDateToUTC(filter.value[1], true);
+          params.push(startValue, endValue);
+          paramIndex += 2;
+        } else if (["gt", "gte", "lt", "lte", "eq"].includes(filter.operator) && typeof filter.value === "string") {
+          // Check if this looks like a date filter
+          const dateMatch = filter.value.match(/^\d{4}-\d{2}-\d{2}$/);
+          if (dateMatch) {
+            const converted = convertPSTDateToUTC(filter.value, filter.operator === "lte" || filter.operator === "lt");
+            params.push(op.transform ? op.transform(converted) : converted);
+          } else {
+            params.push(op.transform ? op.transform(filter.value) : filter.value);
+          }
+          paramIndex++;
+        } else {
+          params.push(op.transform ? op.transform(filter.value) : filter.value);
+          paramIndex++;
+        }
       }
 
       const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
@@ -1617,8 +1655,27 @@ export async function registerRoutes(
 
         const op = getOperatorSQL(filter.operator, paramIndex);
         whereClauses.push(`"${filter.column}" ${op.sql}`);
-        params.push(op.transform ? op.transform(filter.value) : filter.value);
-        paramIndex++;
+        
+        // Handle between operator (needs 2 params) and date conversion
+        if (filter.operator === "between" && Array.isArray(filter.value)) {
+          const startValue = convertPSTDateToUTC(filter.value[0], false);
+          const endValue = convertPSTDateToUTC(filter.value[1], true);
+          params.push(startValue, endValue);
+          paramIndex += 2;
+        } else if (["gt", "gte", "lt", "lte", "eq"].includes(filter.operator) && typeof filter.value === "string") {
+          // Check if this looks like a date filter
+          const dateMatch = filter.value.match(/^\d{4}-\d{2}-\d{2}$/);
+          if (dateMatch) {
+            const converted = convertPSTDateToUTC(filter.value, filter.operator === "lte" || filter.operator === "lt");
+            params.push(op.transform ? op.transform(converted) : converted);
+          } else {
+            params.push(op.transform ? op.transform(filter.value) : filter.value);
+          }
+          paramIndex++;
+        } else {
+          params.push(op.transform ? op.transform(filter.value) : filter.value);
+          paramIndex++;
+        }
       }
 
       const whereSQL =

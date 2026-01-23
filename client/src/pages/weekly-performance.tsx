@@ -238,7 +238,7 @@ export default function WeeklyPerformance() {
             No performance data available
           </div>
         ) : (
-          <ScrollArea className="flex-1">
+          <div className="flex-1 overflow-y-auto">
             <div className="p-6 space-y-6">
               {selectedWeek && (
                 <div className="space-y-4">
@@ -372,7 +372,7 @@ export default function WeeklyPerformance() {
                 </p>
               )}
             </div>
-          </ScrollArea>
+          </div>
         )}
       </div>
     </div>

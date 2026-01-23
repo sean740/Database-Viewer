@@ -3339,12 +3339,15 @@ Always be helpful and explain your suggestions in simple terms.`;
               AND b.created_at >= $1 AND b.created_at < $2
           `, [weekStartUTC, weekEndUTC]),
           
-          // 13. Subscription Fee Revenue (from subscription_invoices paid in week)
+          // 13. Subscription Revenue and Margin (price and margin of bookings linked to subscription_usages created in week)
           pool.query(`
-            SELECT COALESCE(SUM(amount), 0) as total
-            FROM public.subscription_invoices
-            WHERE created_at >= $1 AND created_at < $2
-          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+            SELECT 
+              COALESCE(SUM(b.price), 0) as total_revenue,
+              COALESCE(SUM(b.margin), 0) as total_margin
+            FROM public.subscription_usages su
+            INNER JOIN public.bookings b ON b.id = su.booking_id
+            WHERE su.created_at >= $1 AND su.created_at < $2
+          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total_revenue: 0, total_margin: 0 }] })),
           
           // 14. Member Bookings (bookings from subscription_usages)
           pool.query(`
@@ -3386,14 +3389,15 @@ Always be helpful and explain your suggestions in simple terms.`;
         // Revenue components
         const bookingRevenue = parseFloat(revenueResult.rows[0]?.total_revenue || "0");
         const bookingProfit = parseFloat(revenueResult.rows[0]?.total_profit || "0");
-        const subscriptionRevenue = parseFloat(subscriptionRevenueResult.rows[0]?.total || "0");
+        const subscriptionRevenue = parseFloat(subscriptionRevenueResult.rows[0]?.total_revenue || "0");
+        const subscriptionProfit = parseFloat(subscriptionRevenueResult.rows[0]?.total_margin || "0");
         const customerFees = parseFloat(customerFeesResult.rows[0]?.total || "0");
         
         // Total Revenue = booking revenue + subscription revenue + customer fees
         const totalRevenue = bookingRevenue + subscriptionRevenue + customerFees;
         
-        // Gross Profit = booking margin + subscription revenue (100% margin) + customer fees (100% margin)
-        const totalProfit = bookingProfit + subscriptionRevenue + customerFees;
+        // Gross Profit = booking margin + subscription margin + customer fees (100% margin)
+        const totalProfit = bookingProfit + subscriptionProfit + customerFees;
         const marginPercent = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
         
         const signups = parseInt(signupsResult.rows[0]?.count || "0");

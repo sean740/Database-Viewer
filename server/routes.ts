@@ -3496,9 +3496,9 @@ Always be helpful and explain your suggestions in simple terms.`;
         const newSubscriptions = parseInt(newSubscriptionsResult.rows[0]?.count || "0");
         const memberBookingsRevenue = parseFloat(memberBookingsRevenueResult.rows[0]?.total || "0");
         
-        // % of revenue from memberships (subscription revenue + member booking revenue)
+        // % of revenue from memberships = Subscription Revenue / Total Revenue
         const membershipRevenuePercent = totalRevenue > 0 
-          ? ((subscriptionRevenue + memberBookingsRevenue) / totalRevenue) * 100 
+          ? (subscriptionRevenue / totalRevenue) * 100 
           : 0;
         
         weeklyData.push({

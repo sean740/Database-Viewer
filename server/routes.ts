@@ -3290,6 +3290,7 @@ Always be helpful and explain your suggestions in simple terms.`;
           memberBookingsResult,
           newSubscriptionsResult,
           memberBookingsRevenueResult,
+          customerFeesResult,
         ] = await Promise.all([
           // 1. Bookings Created (created_at in week)
           pool.query(`
@@ -3366,6 +3367,13 @@ Always be helpful and explain your suggestions in simple terms.`;
             INNER JOIN public.subscription_usages su ON su.booking_id = b.id
             WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+          
+          // Customer fees charged in the week
+          pool.query(`
+            SELECT COALESCE(SUM(amount), 0) as total
+            FROM public.customer_fees
+            WHERE created_at >= $1 AND created_at < $2
+          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
         ]);
         
         const bookingsCreated = parseInt(bookingsCreatedResult.rows[0]?.count || "0");
@@ -3374,21 +3382,30 @@ Always be helpful and explain your suggestions in simple terms.`;
         const avgPerDay = bookingsCompleted / 7;
         const conversion = bookingsDue > 0 ? (bookingsCompleted / bookingsDue) * 100 : 0;
         const avgBookingPrice = parseFloat(revenueResult.rows[0]?.avg_price || "0");
-        const totalRevenue = parseFloat(revenueResult.rows[0]?.total_revenue || "0");
-        const totalProfit = parseFloat(revenueResult.rows[0]?.total_profit || "0");
+        
+        // Revenue components
+        const bookingRevenue = parseFloat(revenueResult.rows[0]?.total_revenue || "0");
+        const bookingProfit = parseFloat(revenueResult.rows[0]?.total_profit || "0");
+        const subscriptionRevenue = parseFloat(subscriptionRevenueResult.rows[0]?.total || "0");
+        const customerFees = parseFloat(customerFeesResult.rows[0]?.total || "0");
+        
+        // Total Revenue = booking revenue + subscription revenue + customer fees
+        const totalRevenue = bookingRevenue + subscriptionRevenue + customerFees;
+        
+        // Gross Profit = booking margin + subscription revenue (100% margin) + customer fees (100% margin)
+        const totalProfit = bookingProfit + subscriptionRevenue + customerFees;
         const marginPercent = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+        
         const signups = parseInt(signupsResult.rows[0]?.count || "0");
         const newUsersWithBookings = parseInt(newUsersWithBookingsResult.rows[0]?.count || "0");
         const newUserConversion = signups > 0 ? (newUsersWithBookings / signups) * 100 : 0;
-        const subscriptionRevenue = parseFloat(subscriptionRevenueResult.rows[0]?.total || "0");
         const memberBookings = parseInt(memberBookingsResult.rows[0]?.count || "0");
         const newSubscriptions = parseInt(newSubscriptionsResult.rows[0]?.count || "0");
         const memberBookingsRevenue = parseFloat(memberBookingsRevenueResult.rows[0]?.total || "0");
         
-        // % of revenue from memberships
-        const totalCombinedRevenue = totalRevenue + subscriptionRevenue;
-        const membershipRevenuePercent = totalCombinedRevenue > 0 
-          ? ((subscriptionRevenue + memberBookingsRevenue) / totalCombinedRevenue) * 100 
+        // % of revenue from memberships (subscription revenue + member booking revenue)
+        const membershipRevenuePercent = totalRevenue > 0 
+          ? ((subscriptionRevenue + memberBookingsRevenue) / totalRevenue) * 100 
           : 0;
         
         weeklyData.push({

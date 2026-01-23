@@ -26,5 +26,19 @@
       }
     ],
     "lastUsedAt": "2026-01-13T18:52:17.656Z"
+  },
+  {
+    "id": "ncv827k1m4idejretngisp",
+    "userId": "477d61a0-4ebb-43fc-b3dc-f59a88e03816",
+    "database": "Default",
+    "table": "public.bookings",
+    "filters": [
+      {
+        "column": "booking_change_fee",
+        "operator": "gt",
+        "value": "0"
+      }
+    ],
+    "lastUsedAt": "2026-01-23T18:53:37.966Z"
   }
 ]

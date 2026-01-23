@@ -3473,12 +3473,16 @@ Always be helpful and explain your suggestions in simple terms.`;
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ tip_revenue: 0, tip_profit: 0 }] })),
           
           // Credit packs purchased in the week (user_credits_transactions with type_id=16, joined with credits_packs)
+          // Use DISTINCT ON to avoid duplicate matches if multiple credits_packs have same get_amount
           pool.query(`
-            SELECT COALESCE(SUM(cp.pay_amount), 0) as total
-            FROM public.user_credits_transactions uct
-            INNER JOIN public.credits_packs cp ON uct.amount = cp.get_amount
-            WHERE uct.created_at >= $1 AND uct.created_at < $2
-              AND uct.user_credits_transaction_type_id = 16
+            SELECT COALESCE(SUM(pay_amount), 0) as total
+            FROM (
+              SELECT DISTINCT ON (uct.id) uct.id, cp.pay_amount
+              FROM public.user_credits_transactions uct
+              INNER JOIN public.credits_packs cp ON uct.amount = cp.get_amount
+              WHERE uct.created_at >= $1 AND uct.created_at < $2
+                AND uct.user_credits_transaction_type_id = 16
+            ) unique_transactions
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
         ]);
         

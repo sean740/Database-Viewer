@@ -40,5 +40,19 @@
       }
     ],
     "lastUsedAt": "2026-01-23T18:53:37.966Z"
+  },
+  {
+    "id": "im5mdv787bh3nyj9eehlj",
+    "userId": "084c4fe4-5982-45f3-9505-a29c409c3131",
+    "database": "Default",
+    "table": "public.subscriptions",
+    "filters": [
+      {
+        "column": "status",
+        "operator": "eq",
+        "value": "active"
+      }
+    ],
+    "lastUsedAt": "2026-01-23T20:14:32.299Z"
   }
 ]

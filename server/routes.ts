@@ -270,27 +270,6 @@ function addFilterToQueryWithAlias(
   }
 }
 
-// OpenAI client for NLQ
-let openai: OpenAI | null = null;
-
-function getOpenAIClient(): OpenAI | null {
-  if (openai) return openai;
-  
-  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
-  const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-  
-  if (!apiKey || !baseURL) {
-    return null;
-  }
-
-  openai = new OpenAI({
-    apiKey,
-    baseURL,
-  });
-
-  return openai;
-}
-
 // Middleware to check user role
 function requireRole(...allowedRoles: UserRole[]) {
   return async (req: Request, res: Response, next: Function) => {

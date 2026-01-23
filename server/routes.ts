@@ -2708,23 +2708,25 @@ export async function registerRoutes(
           
           if (isDateGroupBy) {
             // Use xColumn as the date column for date-based grouping
+            // Convert to Pacific Time before grouping so dates align with user expectations
             const dateCol = `"${chartConfig.xColumn}"`;
+            const dateColPST = `(${dateCol} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')`;
             const datePart = chartConfig.groupBy.toLowerCase();
             
             if (datePart === "month") {
-              labelExpr = `TO_CHAR(${dateCol}, 'YYYY-MM')`;
+              labelExpr = `TO_CHAR(${dateColPST}, 'YYYY-MM')`;
               groupByExpr = labelExpr;
             } else if (datePart === "year") {
-              labelExpr = `TO_CHAR(${dateCol}, 'YYYY')`;
+              labelExpr = `TO_CHAR(${dateColPST}, 'YYYY')`;
               groupByExpr = labelExpr;
             } else if (datePart === "day") {
-              labelExpr = `TO_CHAR(${dateCol}, 'YYYY-MM-DD')`;
+              labelExpr = `TO_CHAR(${dateColPST}, 'YYYY-MM-DD')`;
               groupByExpr = labelExpr;
             } else if (datePart === "week") {
-              labelExpr = `TO_CHAR(${dateCol}, 'IYYY-IW')`;
+              labelExpr = `TO_CHAR(${dateColPST}, 'IYYY-IW')`;
               groupByExpr = labelExpr;
             } else if (datePart === "quarter") {
-              labelExpr = `TO_CHAR(${dateCol}, 'YYYY-"Q"Q')`;
+              labelExpr = `TO_CHAR(${dateColPST}, 'YYYY-"Q"Q')`;
               groupByExpr = labelExpr;
             } else {
               labelExpr = dateCol;

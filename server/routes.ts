@@ -3023,10 +3023,15 @@ Always be helpful and explain your suggestions in simple terms.`;
       // Try to parse action from response
       let action = null;
       let validatedAction = null;
+      let displayMessage = assistantMessage; // Message to show user (without JSON)
       try {
         const jsonMatch = assistantMessage.match(/\{[\s\S]*"action"[\s\S]*\}/);
         if (jsonMatch) {
           action = JSON.parse(jsonMatch[0]);
+          // Remove JSON from displayed message - users don't need to see the code
+          displayMessage = assistantMessage.replace(jsonMatch[0], "").trim();
+          // Clean up any leftover markdown code block markers
+          displayMessage = displayMessage.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
           
           const validKinds = ["table", "chart", "metric", "text"];
           
@@ -3067,7 +3072,7 @@ Always be helpful and explain your suggestions in simple terms.`;
                 explanation: action.explanation || "",
               };
             } else if (result && 'error' in result) {
-              assistantMessage += `\n\n**Note:** I wasn't able to create this block because: ${result.error}. Please try rephrasing your request or ask me which columns are available in the table you want to use.`;
+              displayMessage += `\n\n**Note:** I wasn't able to create this block because: ${result.error}. Please try rephrasing your request or ask me which columns are available in the table you want to use.`;
             }
           }
           
@@ -3094,7 +3099,7 @@ Always be helpful and explain your suggestions in simple terms.`;
             }
             
             if (errors.length > 0) {
-              assistantMessage += `\n\n**Note:** Some blocks could not be created: ${errors.join("; ")}. Please try rephrasing your request.`;
+              displayMessage += `\n\n**Note:** Some blocks could not be created: ${errors.join("; ")}. Please try rephrasing your request.`;
             }
           }
         }
@@ -3102,8 +3107,17 @@ Always be helpful and explain your suggestions in simple terms.`;
         // Not a JSON response, that's fine
       }
 
+      // Use displayMessage (with JSON stripped) for user-facing content
+      // Add the explanation from the action if available and displayMessage is empty
+      let finalMessage = displayMessage;
+      if (!finalMessage && validatedAction?.explanation) {
+        finalMessage = validatedAction.explanation;
+      } else if (validatedAction?.explanation && !finalMessage.includes(validatedAction.explanation)) {
+        finalMessage = finalMessage ? `${finalMessage}\n\n${validatedAction.explanation}` : validatedAction.explanation;
+      }
+      
       res.json({
-        message: assistantMessage,
+        message: finalMessage || "I've created the block for you.",
         action: validatedAction,
       });
     } catch (err) {

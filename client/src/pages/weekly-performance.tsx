@@ -144,6 +144,7 @@ function CategoryIcon({ category }: { category: string }) {
 
 export default function WeeklyPerformance() {
   const [selectedDatabase, setSelectedDatabase] = useState<string>("");
+  const [selectedWeekIndex, setSelectedWeekIndex] = useState<number>(0);
   
   const { data: databases = [], isLoading: databasesLoading } = useQuery<DatabaseConnection[]>({
     queryKey: ["/api/databases"],
@@ -155,6 +156,11 @@ export default function WeeklyPerformance() {
       setSelectedDatabase(databases[0].name);
     }
   }, [databases, selectedDatabase]);
+  
+  // Reset selected week when database changes
+  useEffect(() => {
+    setSelectedWeekIndex(0);
+  }, [selectedDatabase]);
   
   const { 
     data: performanceData, 
@@ -169,9 +175,9 @@ export default function WeeklyPerformance() {
   const isLoading = databasesLoading || dataLoading;
   const weeks = performanceData?.weeks || [];
   
-  // Get the most recent week (first in array after reversing)
-  const currentWeek = weeks[0];
-  const previousWeek = weeks[1];
+  // Get the selected week and the one after it for comparison
+  const selectedWeek = weeks[selectedWeekIndex];
+  const comparisonWeek = weeks[selectedWeekIndex + 1];
   
   // Group metrics by category
   const categories = ["Bookings", "Revenue", "Users", "Membership"];
@@ -232,15 +238,15 @@ export default function WeeklyPerformance() {
         ) : (
           <ScrollArea className="flex-1">
             <div className="p-6 space-y-6">
-              {currentWeek && (
+              {selectedWeek && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold">
-                      Current Week: {currentWeek.weekLabel}
+                      {selectedWeekIndex === 0 ? "Current Week" : "Selected Week"}: {selectedWeek.weekLabel}
                     </h2>
-                    {currentWeek.variance && (
+                    {selectedWeek.variance && comparisonWeek && (
                       <p className="text-sm text-muted-foreground">
-                        Compared to previous week ({previousWeek?.weekLabel})
+                        Compared to previous week ({comparisonWeek.weekLabel})
                       </p>
                     )}
                   </div>
@@ -262,11 +268,11 @@ export default function WeeklyPerformance() {
                                 <span className="text-xs text-muted-foreground">{metric.label}</span>
                                 <div className="flex items-center gap-2">
                                   <span className="text-sm font-medium">
-                                    {formatValue(currentWeek.metrics[metric.key], metric.format)}
+                                    {formatValue(selectedWeek.metrics[metric.key], metric.format)}
                                   </span>
-                                  {currentWeek.variance && (
+                                  {selectedWeek.variance && (
                                     <VarianceBadge 
-                                      value={currentWeek.variance[metric.key]} 
+                                      value={selectedWeek.variance[metric.key]} 
                                       isPercentPoint={metric.isPercentPoint}
                                     />
                                   )}
@@ -281,7 +287,10 @@ export default function WeeklyPerformance() {
               )}
               
               <div className="space-y-4">
-                <h2 className="text-lg font-semibold">All Weeks</h2>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold">All Weeks</h2>
+                  <p className="text-xs text-muted-foreground">Click a row to view details above</p>
+                </div>
                 <Card>
                   <ScrollArea className="w-full">
                     <Table>
@@ -302,15 +311,34 @@ export default function WeeklyPerformance() {
                       </TableHeader>
                       <TableBody>
                         {weeks.map((week, index) => (
-                          <TableRow key={week.weekLabel} className={cn(index === 0 && "bg-accent/50")}>
-                            <TableCell className="sticky left-0 bg-card z-10 font-medium">
+                          <TableRow 
+                            key={week.weekLabel} 
+                            className={cn(
+                              "cursor-pointer transition-colors hover-elevate",
+                              index === selectedWeekIndex && "bg-accent/50",
+                              index === 0 && index !== selectedWeekIndex && "bg-muted/30"
+                            )}
+                            onClick={() => setSelectedWeekIndex(index)}
+                            data-testid={`row-week-${index}`}
+                          >
+                            <TableCell className={cn(
+                              "sticky left-0 z-10 font-medium",
+                              index === selectedWeekIndex ? "bg-accent/50" : index === 0 ? "bg-muted/30" : "bg-card"
+                            )}>
                               <div className="flex flex-col">
                                 <span>{week.weekLabel}</span>
-                                {index === 0 && (
-                                  <Badge variant="secondary" className="text-[10px] w-fit mt-1">
-                                    Current
-                                  </Badge>
-                                )}
+                                <div className="flex gap-1 mt-1">
+                                  {index === 0 && (
+                                    <Badge variant="secondary" className="text-[10px] w-fit">
+                                      Current
+                                    </Badge>
+                                  )}
+                                  {index === selectedWeekIndex && (
+                                    <Badge variant="default" className="text-[10px] w-fit">
+                                      Selected
+                                    </Badge>
+                                  )}
+                                </div>
                               </div>
                             </TableCell>
                             {metricConfig.map((metric) => (

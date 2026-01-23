@@ -128,34 +128,56 @@ function getPool(dbName: string): Pool {
   return pool;
 }
 
-// Convert a PST/PDT date string to UTC timestamp for database queries
-// Input: "2026-01-12" (interpreted as midnight PST)
-// Output: "2026-01-12T08:00:00.000Z" (UTC equivalent)
+// Convert a PST/PDT date/datetime string to UTC timestamp for database queries
+// Input: "2026-01-12" or "2026-01-12 00:00:00" or "2026-01-12 23:59:59" (interpreted as PST)
+// Output: UTC equivalent timestamp
 // For end dates, we want end of day PST which is next day 07:59:59 UTC
 function convertPSTDateToUTC(dateStr: string, isEndOfRange: boolean = false): string {
   // Check if it's a simple date string (YYYY-MM-DD format)
   const dateOnlyMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!dateOnlyMatch) {
-    // Not a simple date, return as-is (might already have time component)
-    return dateStr;
+  if (dateOnlyMatch) {
+    const [, year, month, day] = dateOnlyMatch;
+    
+    // PST is UTC-8, PDT is UTC-7
+    // For simplicity, we'll use a fixed offset approach
+    // Create date in PST context and convert to UTC
+    if (isEndOfRange) {
+      // End of day in PST: 23:59:59.999 PST = next day 07:59:59.999 UTC (during PST)
+      // We'll use 08:00:00 of the next day as the exclusive upper bound
+      const date = new Date(`${year}-${month}-${day}T00:00:00-08:00`);
+      date.setDate(date.getDate() + 1); // Move to next day
+      return date.toISOString();
+    } else {
+      // Start of day in PST: 00:00:00 PST = 08:00:00 UTC (during PST)
+      const date = new Date(`${year}-${month}-${day}T00:00:00-08:00`);
+      return date.toISOString();
+    }
   }
   
-  const [, year, month, day] = dateOnlyMatch;
-  
-  // PST is UTC-8, PDT is UTC-7
-  // For simplicity, we'll use a fixed offset approach
-  // Create date in PST context and convert to UTC
-  if (isEndOfRange) {
-    // End of day in PST: 23:59:59.999 PST = next day 07:59:59.999 UTC (during PST)
-    // We'll use 08:00:00 of the next day as the exclusive upper bound
-    const date = new Date(`${year}-${month}-${day}T00:00:00-08:00`);
-    date.setDate(date.getDate() + 1); // Move to next day
-    return date.toISOString();
-  } else {
-    // Start of day in PST: 00:00:00 PST = 08:00:00 UTC (during PST)
-    const date = new Date(`${year}-${month}-${day}T00:00:00-08:00`);
-    return date.toISOString();
+  // Check if it's a datetime string (YYYY-MM-DD HH:MM:SS format) - AI often generates these
+  const dateTimeMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  if (dateTimeMatch) {
+    const [, year, month, day, hour, minute, second] = dateTimeMatch;
+    
+    // If it's 00:00:00 treat as start of day, if 23:59:59 treat as end of day
+    if (hour === "00" && minute === "00" && second === "00") {
+      // Start of day PST -> convert to UTC
+      const date = new Date(`${year}-${month}-${day}T00:00:00-08:00`);
+      return date.toISOString();
+    } else if (hour === "23" && minute === "59" && second === "59") {
+      // End of day PST -> convert to UTC (use start of next day as exclusive bound)
+      const date = new Date(`${year}-${month}-${day}T00:00:00-08:00`);
+      date.setDate(date.getDate() + 1); // Move to next day
+      return date.toISOString();
+    } else {
+      // Specific time in PST -> convert to UTC
+      const date = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}-08:00`);
+      return date.toISOString();
+    }
   }
+  
+  // Not a recognized date format, return as-is
+  return dateStr;
 }
 
 // Build operator SQL

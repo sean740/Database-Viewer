@@ -3620,62 +3620,6 @@ Always be helpful and explain your suggestions in simple terms.`;
     }
   });
 
-  // DEBUG: Export credit pack details for validation
-  app.get("/api/debug/credit-packs/:database", isAuthenticated, async (req, res) => {
-    const { database } = req.params;
-    const { weekStart, weekEnd } = req.query;
-    
-    if (!weekStart || !weekEnd) {
-      return res.status(400).json({ error: "weekStart and weekEnd query params required" });
-    }
-    
-    const pool = pools.get(database);
-    if (!pool) {
-      return res.status(404).json({ error: "Database not found" });
-    }
-    
-    try {
-      const result = await pool.query(`
-        SELECT 
-          uct.id as transaction_id,
-          uct.user_id,
-          uct.amount as transaction_amount,
-          uct.created_at as transaction_created_at,
-          uct.user_credits_transaction_type_id as type_id,
-          cp.id as credit_pack_id,
-          cp.get_amount,
-          cp.pay_amount
-        FROM public.user_credits_transactions uct
-        LEFT JOIN public.credits_packs cp ON uct.amount = cp.get_amount
-        WHERE uct.created_at >= $1 AND uct.created_at < $2
-          AND uct.user_credits_transaction_type_id = 16
-        ORDER BY uct.created_at
-      `, [weekStart, weekEnd]);
-      
-      // Generate CSV
-      const headers = ["transaction_id", "user_id", "transaction_amount", "transaction_created_at", "type_id", "credit_pack_id", "get_amount", "pay_amount"];
-      const csvRows = [headers.join(",")];
-      
-      for (const row of result.rows) {
-        csvRows.push(headers.map(h => {
-          const val = row[h];
-          if (val === null || val === undefined) return "";
-          if (typeof val === "string" && (val.includes(",") || val.includes('"'))) {
-            return `"${val.replace(/"/g, '""')}"`;
-          }
-          return String(val);
-        }).join(","));
-      }
-      
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader("Content-Disposition", `attachment; filename="credit_packs_${weekStart}_to_${weekEnd}.csv"`);
-      res.send(csvRows.join("\n"));
-    } catch (err) {
-      console.error("Error fetching credit pack details:", err);
-      res.status(500).json({ error: "Failed to fetch credit pack details" });
-    }
-  });
-
   // Get available report templates
   app.get("/api/reports/templates", isAuthenticated, async (req, res) => {
     const templates = [

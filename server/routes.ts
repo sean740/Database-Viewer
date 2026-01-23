@@ -3390,13 +3390,12 @@ Always be helpful and explain your suggestions in simple terms.`;
             WHERE created_at >= $1 AND created_at < $2
           `, [weekStartUTC, weekEndUTC]),
           
-          // 11. New Users who created a booking in same week
+          // 11. New Users who have any booking (signed up in week AND have at least one booking ever)
           pool.query(`
             SELECT COUNT(DISTINCT u.id) as count 
             FROM public.users u
             INNER JOIN public.bookings b ON b.user_id = u.id
             WHERE u.created_at >= $1 AND u.created_at < $2
-              AND b.created_at >= $1 AND b.created_at < $2
           `, [weekStartUTC, weekEndUTC]),
           
           // 13. Subscription Revenue and Margin (price and margin of UNIQUE completed bookings with date_due in week, linked to subscription_usages)

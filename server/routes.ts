@@ -3397,15 +3397,18 @@ Always be helpful and explain your suggestions in simple terms.`;
               AND b.created_at >= $1 AND b.created_at < $2
           `, [weekStartUTC, weekEndUTC]),
           
-          // 13. Subscription Revenue and Margin (price and margin of completed bookings with date_due in week, linked to subscription_usages)
+          // 13. Subscription Revenue and Margin (price and margin of UNIQUE completed bookings with date_due in week, linked to subscription_usages)
           pool.query(`
             SELECT 
-              COALESCE(SUM(b.price), 0) as total_revenue,
-              COALESCE(SUM(b.margin), 0) as total_margin
-            FROM public.bookings b
-            INNER JOIN public.subscription_usages su ON su.booking_id = b.id
-            WHERE b.date_due >= $1 AND b.date_due < $2
-              AND b.status = 'done'
+              COALESCE(SUM(price), 0) as total_revenue,
+              COALESCE(SUM(margin), 0) as total_margin
+            FROM (
+              SELECT DISTINCT b.id, b.price, b.margin
+              FROM public.bookings b
+              INNER JOIN public.subscription_usages su ON su.booking_id = b.id
+              WHERE b.date_due >= $1 AND b.date_due < $2
+                AND b.status = 'done'
+            ) unique_bookings
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total_revenue: 0, total_margin: 0 }] })),
           
           // 13b. Subscription Fees (paid subscription_invoices updated in week, with price based on price_plan_id)
@@ -3439,12 +3442,15 @@ Always be helpful and explain your suggestions in simple terms.`;
             WHERE created_at >= $1 AND created_at < $2
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ count: 0 }] })),
           
-          // Revenue from member bookings (for % calculation)
+          // Revenue from member bookings (for % calculation) - UNIQUE bookings only
           pool.query(`
-            SELECT COALESCE(SUM(b.price), 0) as total
-            FROM public.bookings b
-            INNER JOIN public.subscription_usages su ON su.booking_id = b.id
-            WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
+            SELECT COALESCE(SUM(price), 0) as total
+            FROM (
+              SELECT DISTINCT b.id, b.price
+              FROM public.bookings b
+              INNER JOIN public.subscription_usages su ON su.booking_id = b.id
+              WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
+            ) unique_bookings
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
           
           // Customer fees charged in the week

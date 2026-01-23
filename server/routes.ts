@@ -128,6 +128,36 @@ function getPool(dbName: string): Pool {
   return pool;
 }
 
+// Convert a PST/PDT date string to UTC timestamp for database queries
+// Input: "2026-01-12" (interpreted as midnight PST)
+// Output: "2026-01-12T08:00:00.000Z" (UTC equivalent)
+// For end dates, we want end of day PST which is next day 07:59:59 UTC
+function convertPSTDateToUTC(dateStr: string, isEndOfRange: boolean = false): string {
+  // Check if it's a simple date string (YYYY-MM-DD format)
+  const dateOnlyMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!dateOnlyMatch) {
+    // Not a simple date, return as-is (might already have time component)
+    return dateStr;
+  }
+  
+  const [, year, month, day] = dateOnlyMatch;
+  
+  // PST is UTC-8, PDT is UTC-7
+  // For simplicity, we'll use a fixed offset approach
+  // Create date in PST context and convert to UTC
+  if (isEndOfRange) {
+    // End of day in PST: 23:59:59.999 PST = next day 07:59:59.999 UTC (during PST)
+    // We'll use 08:00:00 of the next day as the exclusive upper bound
+    const date = new Date(`${year}-${month}-${day}T00:00:00-08:00`);
+    date.setDate(date.getDate() + 1); // Move to next day
+    return date.toISOString();
+  } else {
+    // Start of day in PST: 00:00:00 PST = 08:00:00 UTC (during PST)
+    const date = new Date(`${year}-${month}-${day}T00:00:00-08:00`);
+    return date.toISOString();
+  }
+}
+
 // Build operator SQL
 function getOperatorSQL(
   operator: FilterOperator,
@@ -170,8 +200,20 @@ function addFilterToQuery(
   whereClauses.push(`"${f.column}" ${opInfo.sql}`);
   
   if (f.operator === "between" && Array.isArray(f.value)) {
-    // For "between", push both values
-    params.push(f.value[0], f.value[1]);
+    // For "between", convert date strings from PST to UTC
+    const startValue = convertPSTDateToUTC(f.value[0], false);
+    const endValue = convertPSTDateToUTC(f.value[1], true);
+    params.push(startValue, endValue);
+  } else if (["gt", "gte", "lt", "lte", "eq"].includes(f.operator) && typeof f.value === "string") {
+    // Check if this looks like a date filter
+    const dateMatch = f.value.match(/^\d{4}-\d{2}-\d{2}$/);
+    if (dateMatch) {
+      // For single date comparisons, use start of day PST
+      const converted = convertPSTDateToUTC(f.value, f.operator === "lte" || f.operator === "lt");
+      params.push(opInfo.transform ? opInfo.transform(converted) : converted);
+    } else {
+      params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+    }
   } else {
     params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
   }
@@ -187,7 +229,20 @@ function addFilterToQueryWithAlias(
   whereClauses.push(`${f.column} ${opInfo.sql}`);
   
   if (f.operator === "between" && Array.isArray(f.value)) {
-    params.push(f.value[0], f.value[1]);
+    // For "between", convert date strings from PST to UTC
+    const startValue = convertPSTDateToUTC(f.value[0], false);
+    const endValue = convertPSTDateToUTC(f.value[1], true);
+    params.push(startValue, endValue);
+  } else if (["gt", "gte", "lt", "lte", "eq"].includes(f.operator) && typeof f.value === "string") {
+    // Check if this looks like a date filter
+    const dateMatch = f.value.match(/^\d{4}-\d{2}-\d{2}$/);
+    if (dateMatch) {
+      // For single date comparisons, use start of day PST
+      const converted = convertPSTDateToUTC(f.value, f.operator === "lte" || f.operator === "lt");
+      params.push(opInfo.transform ? opInfo.transform(converted) : converted);
+    } else {
+      params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
+    }
   } else {
     params.push(opInfo.transform ? opInfo.transform(f.value) : f.value);
   }

@@ -3205,6 +3205,298 @@ Always be helpful and explain your suggestions in simple terms.`;
     }
   });
 
+  // Weekly Performance Dashboard API
+  app.get("/api/weekly-performance/:database", isAuthenticated, async (req, res) => {
+    try {
+      const { database } = req.params;
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      
+      if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      
+      const pool = getPool(database);
+      
+      // Generate week ranges from Dec 29, 2025 to current week (Mon-Sun, PST)
+      // Use explicit PST dates to handle DST correctly
+      const weeks: { startUTC: string; endUTC: string; label: string }[] = [];
+      
+      // Helper to get PST offset for a given date (handles DST)
+      const getPSTOffset = (date: Date): string => {
+        // PST = UTC-8, PDT = UTC-7
+        // PDT: Second Sunday of March to First Sunday of November
+        const month = date.getMonth();
+        const day = date.getDate();
+        
+        // March (2) - PDT starts second Sunday
+        // November (10) - PDT ends first Sunday
+        if (month > 2 && month < 10) {
+          return "-07:00"; // PDT
+        } else if (month < 2 || month > 10) {
+          return "-08:00"; // PST
+        } else if (month === 2) {
+          // March - check if after second Sunday
+          const secondSunday = 14 - new Date(date.getFullYear(), 2, 1).getDay();
+          return day >= secondSunday ? "-07:00" : "-08:00";
+        } else {
+          // November - check if before first Sunday
+          const firstSunday = 7 - new Date(date.getFullYear(), 10, 1).getDay();
+          if (firstSunday === 7) return day >= 7 ? "-08:00" : "-07:00";
+          return day >= firstSunday ? "-08:00" : "-07:00";
+        }
+      };
+      
+      // Start from Dec 29, 2025 (Monday) - iterate by week
+      let currentYear = 2025;
+      let currentMonth = 11; // December (0-indexed)
+      let currentDay = 29;
+      
+      const now = new Date();
+      
+      while (true) {
+        // Build week start date string in PST
+        const weekStartDate = new Date(currentYear, currentMonth, currentDay);
+        const startOffset = getPSTOffset(weekStartDate);
+        const startDateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}T00:00:00${startOffset}`;
+        const weekStartUTC = new Date(startDateStr).toISOString();
+        
+        // Week end is 6 days later (Sunday) at 23:59:59
+        const weekEndDate = new Date(currentYear, currentMonth, currentDay + 6);
+        const endYear = weekEndDate.getFullYear();
+        const endMonth = weekEndDate.getMonth();
+        const endDay = weekEndDate.getDate();
+        const endOffset = getPSTOffset(weekEndDate);
+        const endDateStr = `${endYear}-${String(endMonth + 1).padStart(2, '0')}-${String(endDay).padStart(2, '0')}T23:59:59${endOffset}`;
+        const weekEndUTC = new Date(endDateStr).toISOString();
+        
+        // If week start is past today, stop
+        if (new Date(weekStartUTC) > now) break;
+        
+        // Format label as "Dec 29 - Jan 4"
+        const startMonthLabel = weekStartDate.toLocaleDateString("en-US", { month: "short" });
+        const startDayLabel = weekStartDate.getDate();
+        const endMonthLabel = weekEndDate.toLocaleDateString("en-US", { month: "short" });
+        const endDayLabel = weekEndDate.getDate();
+        
+        const label = startMonthLabel === endMonthLabel 
+          ? `${startMonthLabel} ${startDayLabel} - ${endDayLabel}`
+          : `${startMonthLabel} ${startDayLabel} - ${endMonthLabel} ${endDayLabel}`;
+        
+        weeks.push({ startUTC: weekStartUTC, endUTC: weekEndUTC, label });
+        
+        // Move to next Monday (add 7 days)
+        const nextMonday = new Date(currentYear, currentMonth, currentDay + 7);
+        currentYear = nextMonday.getFullYear();
+        currentMonth = nextMonday.getMonth();
+        currentDay = nextMonday.getDate();
+      }
+      
+      // Calculate metrics for each week
+      const weeklyData: any[] = [];
+      
+      for (const week of weeks) {
+        const weekStartUTC = week.startUTC;
+        const weekEndUTC = week.endUTC;
+        
+        // Run all queries in parallel for efficiency
+        const [
+          bookingsCreatedResult,
+          bookingsDueResult,
+          bookingsCompletedResult,
+          revenueResult,
+          signupsResult,
+          newUsersWithBookingsResult,
+          subscriptionRevenueResult,
+          memberBookingsResult,
+          newSubscriptionsResult,
+          memberBookingsRevenueResult,
+        ] = await Promise.all([
+          // 1. Bookings Created (created_at in week)
+          pool.query(`
+            SELECT COUNT(*) as count 
+            FROM public.bookings 
+            WHERE created_at >= $1 AND created_at < $2
+          `, [weekStartUTC, weekEndUTC]),
+          
+          // 2. Bookings Due (date_due in week)
+          pool.query(`
+            SELECT COUNT(*) as count 
+            FROM public.bookings 
+            WHERE date_due >= $1 AND date_due < $2
+          `, [weekStartUTC, weekEndUTC]),
+          
+          // 3. Bookings Completed (date_due in week AND status = 'done')
+          pool.query(`
+            SELECT COUNT(*) as count 
+            FROM public.bookings 
+            WHERE date_due >= $1 AND date_due < $2 AND status = 'done'
+          `, [weekStartUTC, weekEndUTC]),
+          
+          // 6, 7, 8: Revenue metrics for completed bookings
+          pool.query(`
+            SELECT 
+              COALESCE(AVG(price), 0) as avg_price,
+              COALESCE(SUM(price), 0) as total_revenue,
+              COALESCE(SUM(margin), 0) as total_profit
+            FROM public.bookings 
+            WHERE date_due >= $1 AND date_due < $2 AND status = 'done'
+          `, [weekStartUTC, weekEndUTC]),
+          
+          // 10. Sign Ups (new users created_at in week)
+          pool.query(`
+            SELECT COUNT(*) as count 
+            FROM public.users 
+            WHERE created_at >= $1 AND created_at < $2
+          `, [weekStartUTC, weekEndUTC]),
+          
+          // 11. New Users who created a booking in same week
+          pool.query(`
+            SELECT COUNT(DISTINCT u.id) as count 
+            FROM public.users u
+            INNER JOIN public.bookings b ON b.user_id = u.id
+            WHERE u.created_at >= $1 AND u.created_at < $2
+              AND b.created_at >= $1 AND b.created_at < $2
+          `, [weekStartUTC, weekEndUTC]),
+          
+          // 13. Subscription Fee Revenue (from subscription_invoices paid in week)
+          pool.query(`
+            SELECT COALESCE(SUM(amount), 0) as total
+            FROM public.subscription_invoices
+            WHERE created_at >= $1 AND created_at < $2
+          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+          
+          // 14. Member Bookings (bookings from subscription_usages)
+          pool.query(`
+            SELECT COUNT(*) as count
+            FROM public.subscription_usages
+            WHERE created_at >= $1 AND created_at < $2
+          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ count: 0 }] })),
+          
+          // 16. New Membership Signups
+          pool.query(`
+            SELECT COUNT(*) as count
+            FROM public.subscriptions
+            WHERE created_at >= $1 AND created_at < $2
+          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ count: 0 }] })),
+          
+          // Revenue from member bookings (for % calculation)
+          pool.query(`
+            SELECT COALESCE(SUM(b.price), 0) as total
+            FROM public.bookings b
+            INNER JOIN public.subscription_usages su ON su.booking_id = b.id
+            WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
+          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+        ]);
+        
+        const bookingsCreated = parseInt(bookingsCreatedResult.rows[0]?.count || "0");
+        const bookingsDue = parseInt(bookingsDueResult.rows[0]?.count || "0");
+        const bookingsCompleted = parseInt(bookingsCompletedResult.rows[0]?.count || "0");
+        const avgPerDay = bookingsCompleted / 7;
+        const conversion = bookingsDue > 0 ? (bookingsCompleted / bookingsDue) * 100 : 0;
+        const avgBookingPrice = parseFloat(revenueResult.rows[0]?.avg_price || "0");
+        const totalRevenue = parseFloat(revenueResult.rows[0]?.total_revenue || "0");
+        const totalProfit = parseFloat(revenueResult.rows[0]?.total_profit || "0");
+        const marginPercent = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+        const signups = parseInt(signupsResult.rows[0]?.count || "0");
+        const newUsersWithBookings = parseInt(newUsersWithBookingsResult.rows[0]?.count || "0");
+        const newUserConversion = signups > 0 ? (newUsersWithBookings / signups) * 100 : 0;
+        const subscriptionRevenue = parseFloat(subscriptionRevenueResult.rows[0]?.total || "0");
+        const memberBookings = parseInt(memberBookingsResult.rows[0]?.count || "0");
+        const newSubscriptions = parseInt(newSubscriptionsResult.rows[0]?.count || "0");
+        const memberBookingsRevenue = parseFloat(memberBookingsRevenueResult.rows[0]?.total || "0");
+        
+        // % of revenue from memberships
+        const totalCombinedRevenue = totalRevenue + subscriptionRevenue;
+        const membershipRevenuePercent = totalCombinedRevenue > 0 
+          ? ((subscriptionRevenue + memberBookingsRevenue) / totalCombinedRevenue) * 100 
+          : 0;
+        
+        weeklyData.push({
+          weekLabel: week.label,
+          weekStart: weekStartUTC,
+          weekEnd: weekEndUTC,
+          metrics: {
+            bookingsCreated,
+            bookingsDue,
+            bookingsCompleted,
+            avgPerDay: Math.round(avgPerDay * 100) / 100,
+            conversion: Math.round(conversion * 100) / 100,
+            avgBookingPrice: Math.round(avgBookingPrice * 100) / 100,
+            totalRevenue: Math.round(totalRevenue * 100) / 100,
+            totalProfit: Math.round(totalProfit * 100) / 100,
+            marginPercent: Math.round(marginPercent * 100) / 100,
+            signups,
+            newUsersWithBookings,
+            newUserConversion: Math.round(newUserConversion * 100) / 100,
+            subscriptionRevenue: Math.round(subscriptionRevenue * 100) / 100,
+            memberBookings,
+            membershipRevenuePercent: Math.round(membershipRevenuePercent * 100) / 100,
+            newSubscriptions,
+          },
+        });
+      }
+      
+      // Calculate variance (compare each week to previous week)
+      const weeklyDataWithVariance = weeklyData.map((week, index) => {
+        if (index === 0) {
+          return { ...week, variance: null };
+        }
+        
+        const prev = weeklyData[index - 1].metrics;
+        const curr = week.metrics;
+        
+        const calcVariance = (current: number, previous: number) => {
+          if (previous === 0) return current > 0 ? 100 : 0;
+          return Math.round(((current - previous) / previous) * 100 * 100) / 100;
+        };
+        
+        return {
+          ...week,
+          variance: {
+            bookingsCreated: calcVariance(curr.bookingsCreated, prev.bookingsCreated),
+            bookingsDue: calcVariance(curr.bookingsDue, prev.bookingsDue),
+            bookingsCompleted: calcVariance(curr.bookingsCompleted, prev.bookingsCompleted),
+            avgPerDay: calcVariance(curr.avgPerDay, prev.avgPerDay),
+            conversion: Math.round((curr.conversion - prev.conversion) * 100) / 100, // pp change
+            avgBookingPrice: calcVariance(curr.avgBookingPrice, prev.avgBookingPrice),
+            totalRevenue: calcVariance(curr.totalRevenue, prev.totalRevenue),
+            totalProfit: calcVariance(curr.totalProfit, prev.totalProfit),
+            marginPercent: Math.round((curr.marginPercent - prev.marginPercent) * 100) / 100, // pp change
+            signups: calcVariance(curr.signups, prev.signups),
+            newUsersWithBookings: calcVariance(curr.newUsersWithBookings, prev.newUsersWithBookings),
+            newUserConversion: Math.round((curr.newUserConversion - prev.newUserConversion) * 100) / 100, // pp change
+            subscriptionRevenue: calcVariance(curr.subscriptionRevenue, prev.subscriptionRevenue),
+            memberBookings: calcVariance(curr.memberBookings, prev.memberBookings),
+            membershipRevenuePercent: Math.round((curr.membershipRevenuePercent - prev.membershipRevenuePercent) * 100) / 100,
+            newSubscriptions: calcVariance(curr.newSubscriptions, prev.newSubscriptions),
+          },
+        };
+      });
+      
+      // Reverse to show most recent first
+      weeklyDataWithVariance.reverse();
+      
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "VIEW_WEEKLY_PERFORMANCE",
+        database,
+        table: undefined,
+        ip: req.ip || undefined,
+        details: `Viewed ${weeklyDataWithVariance.length} weeks`,
+      });
+      
+      res.json({
+        weeks: weeklyDataWithVariance,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("Error fetching weekly performance:", err);
+      res.status(500).json({ error: "Failed to fetch weekly performance data" });
+    }
+  });
+
   // Get available report templates
   app.get("/api/reports/templates", isAuthenticated, async (req, res) => {
     const templates = [

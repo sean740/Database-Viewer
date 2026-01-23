@@ -9,6 +9,7 @@ import DatabaseViewer from "@/pages/database-viewer";
 import LandingPage from "@/pages/landing-page";
 import AdminPage from "@/pages/admin-page";
 import MyReports from "@/pages/my-reports";
+import WeeklyPerformance from "@/pages/weekly-performance";
 import { Loader2 } from "lucide-react";
 
 function AuthenticatedRouter() {
@@ -16,6 +17,7 @@ function AuthenticatedRouter() {
     <Switch>
       <Route path="/" component={DatabaseViewer} />
       <Route path="/my-reports" component={MyReports} />
+      <Route path="/weekly-performance" component={WeeklyPerformance} />
       <Route path="/admin" component={AdminPage} />
       <Route component={NotFound} />
     </Switch>

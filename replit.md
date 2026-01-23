@@ -87,8 +87,20 @@ filters.json       # Admin-configured filter definitions (per table)
 | GET | `/api/export` | Export current view as CSV |
 | GET | `/api/nlq/status` | Check if NLQ is enabled |
 | POST | `/api/nlq` | Process natural language query |
+| GET | `/api/weekly-performance/:database` | Get weekly performance metrics dashboard data |
 
 ## Features
+
+### Weekly Performance Dashboard
+- Accessible at `/weekly-performance` via sidebar button
+- Displays 16 key business metrics per week (Monday-Sunday, PST):
+  - **Bookings**: Created, Due, Completed, Avg/Day, Conversion (Done/Due)
+  - **Revenue**: Avg Booking Price, Total Revenue, Gross Profit, Margin %
+  - **Users**: Sign Ups, New Users (with booking), New User Conversion
+  - **Membership**: Subscription Revenue, Member Bookings, % from Members, New Memberships
+- Shows variance compared to previous week (percentage or percentage point change)
+- Data from Dec 29, 2025 onward, current week at top
+- Handles PST/PDT timezone correctly for week boundaries
 
 ### Read-Only Safety
 - Only SELECT queries are executed

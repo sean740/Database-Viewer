@@ -39,6 +39,7 @@ interface WeekMetrics {
   newUsersWithBookings: number;
   newUserConversion: number;
   subscriptionRevenue: number;
+  subscriptionFees: number;
   memberBookings: number;
   membershipRevenuePercent: number;
   newSubscriptions: number;
@@ -77,6 +78,7 @@ const metricConfig: {
   { key: "newUsersWithBookings", label: "New Users (w/ Booking)", category: "Users", format: "number" },
   { key: "newUserConversion", label: "New User Conversion", category: "Users", format: "percent", isPercentPoint: true },
   { key: "subscriptionRevenue", label: "Subscription Revenue", category: "Membership", format: "currency" },
+  { key: "subscriptionFees", label: "Subscription Fees", category: "Membership", format: "currency" },
   { key: "memberBookings", label: "Member Bookings", category: "Membership", format: "number" },
   { key: "membershipRevenuePercent", label: "% Revenue from Members", category: "Membership", format: "percent", isPercentPoint: true },
   { key: "newSubscriptions", label: "New Memberships", category: "Membership", format: "number" },

@@ -3344,6 +3344,7 @@ Always be helpful and explain your suggestions in simple terms.`;
           signupsResult,
           newUsersWithBookingsResult,
           subscriptionRevenueResult,
+          subscriptionFeesResult,
           memberBookingsResult,
           newSubscriptionsResult,
           memberBookingsRevenueResult,
@@ -3396,16 +3397,31 @@ Always be helpful and explain your suggestions in simple terms.`;
               AND b.created_at >= $1 AND b.created_at < $2
           `, [weekStartUTC, weekEndUTC]),
           
-          // 13. Subscription Revenue and Margin (price and margin of completed bookings linked to subscription_usages created in week)
+          // 13. Subscription Revenue and Margin (price and margin of completed bookings with date_due in week, linked to subscription_usages)
           pool.query(`
             SELECT 
               COALESCE(SUM(b.price), 0) as total_revenue,
               COALESCE(SUM(b.margin), 0) as total_margin
-            FROM public.subscription_usages su
-            INNER JOIN public.bookings b ON b.id = su.booking_id
-            WHERE su.created_at >= $1 AND su.created_at < $2
+            FROM public.bookings b
+            INNER JOIN public.subscription_usages su ON su.booking_id = b.id
+            WHERE b.date_due >= $1 AND b.date_due < $2
               AND b.status = 'done'
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total_revenue: 0, total_margin: 0 }] })),
+          
+          // 13b. Subscription Fees (paid subscription_invoices updated in week, with price based on price_plan_id)
+          pool.query(`
+            SELECT COALESCE(SUM(
+              CASE 
+                WHEN s.price_plan_id = 11 THEN 96.00
+                WHEN s.price_plan_id = 10 THEN 9.99
+                ELSE 0
+              END
+            ), 0) as total
+            FROM public.subscription_invoices si
+            INNER JOIN public.subscriptions s ON s.id = si.subscription_id
+            WHERE si.updated_at >= $1 AND si.updated_at < $2
+              AND si.status = 'paid'
+          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
           
           // 14. Member Bookings (unique completed bookings with date_due in week, linked to subscription_usages)
           pool.query(`
@@ -3449,15 +3465,19 @@ Always be helpful and explain your suggestions in simple terms.`;
         // Revenue components
         const bookingRevenue = parseFloat(revenueResult.rows[0]?.total_revenue || "0");
         const bookingProfit = parseFloat(revenueResult.rows[0]?.total_profit || "0");
-        const subscriptionRevenue = parseFloat(subscriptionRevenueResult.rows[0]?.total_revenue || "0");
-        const subscriptionProfit = parseFloat(subscriptionRevenueResult.rows[0]?.total_margin || "0");
+        const subscriptionBookingRevenue = parseFloat(subscriptionRevenueResult.rows[0]?.total_revenue || "0");
+        const subscriptionBookingProfit = parseFloat(subscriptionRevenueResult.rows[0]?.total_margin || "0");
+        const subscriptionFees = parseFloat(subscriptionFeesResult.rows[0]?.total || "0");
         const customerFees = parseFloat(customerFeesResult.rows[0]?.total || "0");
+        
+        // Subscription Revenue = subscription booking revenue + subscription fees
+        const subscriptionRevenue = subscriptionBookingRevenue + subscriptionFees;
         
         // Total Revenue = booking revenue + subscription revenue + customer fees
         const totalRevenue = bookingRevenue + subscriptionRevenue + customerFees;
         
-        // Gross Profit = booking margin + subscription margin + customer fees (100% margin)
-        const totalProfit = bookingProfit + subscriptionProfit + customerFees;
+        // Gross Profit = booking margin + subscription booking margin + subscription fees (100% margin) + customer fees (100% margin)
+        const totalProfit = bookingProfit + subscriptionBookingProfit + subscriptionFees + customerFees;
         const marginPercent = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
         
         const signups = parseInt(signupsResult.rows[0]?.count || "0");
@@ -3490,6 +3510,7 @@ Always be helpful and explain your suggestions in simple terms.`;
             newUsersWithBookings,
             newUserConversion: Math.round(newUserConversion * 100) / 100,
             subscriptionRevenue: Math.round(subscriptionRevenue * 100) / 100,
+            subscriptionFees: Math.round(subscriptionFees * 100) / 100,
             memberBookings,
             membershipRevenuePercent: Math.round(membershipRevenuePercent * 100) / 100,
             newSubscriptions,
@@ -3527,6 +3548,7 @@ Always be helpful and explain your suggestions in simple terms.`;
             newUsersWithBookings: calcVariance(curr.newUsersWithBookings, prev.newUsersWithBookings),
             newUserConversion: Math.round((curr.newUserConversion - prev.newUserConversion) * 100) / 100, // pp change
             subscriptionRevenue: calcVariance(curr.subscriptionRevenue, prev.subscriptionRevenue),
+            subscriptionFees: calcVariance(curr.subscriptionFees, prev.subscriptionFees),
             memberBookings: calcVariance(curr.memberBookings, prev.memberBookings),
             membershipRevenuePercent: Math.round((curr.membershipRevenuePercent - prev.membershipRevenuePercent) * 100) / 100,
             newSubscriptions: calcVariance(curr.newSubscriptions, prev.newSubscriptions),

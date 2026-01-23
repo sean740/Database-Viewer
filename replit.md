@@ -91,7 +91,7 @@ filters.json       # Admin-configured filter definitions (per table)
 
 ## Features
 
-### Weekly Performance Dashboard
+### Weekly Marketing Performance Dashboard
 - Accessible at `/weekly-performance` via sidebar button
 - Displays 16 key business metrics per week (Monday-Sunday, PST):
   - **Bookings**: Created, Due, Completed, Avg/Day, Conversion (Done/Due)

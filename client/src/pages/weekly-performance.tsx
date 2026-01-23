@@ -203,7 +203,7 @@ export default function WeeklyPerformance() {
                 </Button>
               </Link>
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">Weekly Performance Dashboard</h1>
+                <h1 className="text-2xl font-bold tracking-tight">Weekly Marketing Performance Dashboard</h1>
                 <p className="text-sm text-muted-foreground">
                   Track key metrics week over week (Monday - Sunday, PST)
                 </p>

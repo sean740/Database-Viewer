@@ -3508,6 +3508,9 @@ Always be helpful and explain your suggestions in simple terms.`;
         // (subscriptionBookingRevenue is already part of bookingRevenue, so we only add subscriptionFees)
         const totalRevenue = bookingRevenue + subscriptionFees + customerFees + tipRevenue + creditPackRevenue;
         
+        // Debug logging for revenue validation
+        console.log(`[REVENUE DEBUG] ${week.label}: Booking=$${bookingRevenue.toFixed(2)}, SubFees=$${subscriptionFees.toFixed(2)}, CustFees=$${customerFees.toFixed(2)}, Tips=$${tipRevenue.toFixed(2)}, CreditPacks=$${creditPackRevenue.toFixed(2)}, TOTAL=$${totalRevenue.toFixed(2)}`);
+        
         // Gross Profit = booking margin + subscription fees (100% margin) + customer fees (100% margin) + tip profit
         // (subscriptionBookingProfit is already part of bookingProfit, so we don't add it again)
         // Credit packs are 100% revenue, 0% profit (or needs separate margin - currently not adding to profit)

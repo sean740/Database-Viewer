@@ -3339,7 +3339,7 @@ Always be helpful and explain your suggestions in simple terms.`;
               AND b.created_at >= $1 AND b.created_at < $2
           `, [weekStartUTC, weekEndUTC]),
           
-          // 13. Subscription Revenue and Margin (price and margin of bookings linked to subscription_usages created in week)
+          // 13. Subscription Revenue and Margin (price and margin of completed bookings linked to subscription_usages created in week)
           pool.query(`
             SELECT 
               COALESCE(SUM(b.price), 0) as total_revenue,
@@ -3347,6 +3347,7 @@ Always be helpful and explain your suggestions in simple terms.`;
             FROM public.subscription_usages su
             INNER JOIN public.bookings b ON b.id = su.booking_id
             WHERE su.created_at >= $1 AND su.created_at < $2
+              AND b.status = 'done'
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total_revenue: 0, total_margin: 0 }] })),
           
           // 14. Member Bookings (bookings from subscription_usages)

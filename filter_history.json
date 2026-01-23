@@ -67,6 +67,20 @@
         "value": "16"
       }
     ],
-    "lastUsedAt": "2026-01-23T23:08:29.845Z"
+    "lastUsedAt": "2026-01-23T23:14:20.798Z"
+  },
+  {
+    "id": "5i732x8rn25ewywo8lbgs",
+    "userId": "084c4fe4-5982-45f3-9505-a29c409c3131",
+    "database": "Default",
+    "table": "public.booking_tips",
+    "filters": [
+      {
+        "column": "id",
+        "operator": "gt",
+        "value": "10000"
+      }
+    ],
+    "lastUsedAt": "2026-01-23T23:12:12.251Z"
   }
 ]

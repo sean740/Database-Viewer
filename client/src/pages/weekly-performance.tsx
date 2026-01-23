@@ -293,16 +293,16 @@ export default function WeeklyPerformance() {
                   <h2 className="text-lg font-semibold">All Weeks</h2>
                   <p className="text-xs text-muted-foreground">Click a row to view details above</p>
                 </div>
-                <Card>
-                  <ScrollArea className="w-full">
-                    <Table>
+                <Card className="overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <Table className="min-w-max">
                       <TableHeader>
                         <TableRow>
-                          <TableHead className="sticky left-0 bg-card z-10 min-w-[140px]">Week</TableHead>
+                          <TableHead className="sticky left-0 bg-card z-10 min-w-[140px] whitespace-nowrap">Week</TableHead>
                           {metricConfig.map((metric) => (
-                            <TableHead key={metric.key} className="text-right min-w-[120px]">
+                            <TableHead key={metric.key} className="text-right min-w-[110px] whitespace-nowrap">
                               <div className="flex flex-col items-end">
-                                <span>{metric.label}</span>
+                                <span className="text-xs">{metric.label}</span>
                                 <span className="text-[10px] text-muted-foreground font-normal">
                                   {metric.category}
                                 </span>
@@ -362,7 +362,7 @@ export default function WeeklyPerformance() {
                         ))}
                       </TableBody>
                     </Table>
-                  </ScrollArea>
+                  </div>
                 </Card>
               </div>
               

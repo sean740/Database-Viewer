@@ -2870,20 +2870,88 @@ export async function registerRoutes(
         
       } else if (block.kind === "metric") {
         const metricConfig = config as MetricBlockConfig;
-        validateIdentifier(metricConfig.column, "column");
         
         const aggFunc = metricConfig.aggregateFunction.toUpperCase();
         if (!["COUNT", "SUM", "AVG", "MIN", "MAX"].includes(aggFunc)) {
           return res.status(400).json({ error: "Invalid aggregate function" });
         }
         
-        query = `SELECT ${aggFunc}("${metricConfig.column}") as value FROM ${tableRef}`;
+        // Handle JOIN if present
+        const mainAlias = "m";
+        const joinAlias = "joined";
+        let fromClause = `${tableRef} AS ${mainAlias}`;
+        let columnRef: string;
         
-        // Add filters
+        // Determine if column is from joined table (e.g., "joined.price")
+        if (metricConfig.column.includes(".")) {
+          const parts = metricConfig.column.split(".");
+          if (parts.length !== 2) {
+            return res.status(400).json({ error: "Invalid column reference format" });
+          }
+          const [prefix, colName] = parts;
+          validateIdentifier(colName, "column");
+          
+          // Check if we have a join config
+          if (!(metricConfig as any).join) {
+            return res.status(400).json({ error: "Cannot use dotted column reference without join config" });
+          }
+          
+          // Use the join alias
+          columnRef = `${joinAlias}."${colName}"`;
+        } else {
+          validateIdentifier(metricConfig.column, "column");
+          columnRef = `${mainAlias}."${metricConfig.column}"`;
+        }
+        
+        // Build JOIN if present
+        if ((metricConfig as any).join?.table) {
+          const joinConfig = (metricConfig as any).join;
+          const joinParsed = parseTableName(joinConfig.table);
+          if (!joinParsed) {
+            return res.status(400).json({ error: "Invalid join table name" });
+          }
+          const joinTableRef = `"${joinParsed.schema}"."${joinParsed.table}"`;
+          const joinType = joinConfig.type === "inner" ? "INNER JOIN" : "LEFT JOIN";
+          const [fromCol, toCol] = joinConfig.on;
+          validateIdentifier(fromCol, "column");
+          validateIdentifier(toCol, "column");
+          fromClause += ` ${joinType} ${joinTableRef} AS ${joinAlias} ON ${mainAlias}."${fromCol}" = ${joinAlias}."${toCol}"`;
+        }
+        
+        query = `SELECT ${aggFunc}(${columnRef}) as value FROM ${fromClause}`;
+        
+        // Add filters (need to handle aliased columns)
         if (metricConfig.filters?.length > 0) {
           const whereClauses: string[] = [];
           metricConfig.filters.forEach((f) => {
-            addFilterToQuery(f, params, whereClauses);
+            // For filters, use main alias for non-dotted columns
+            const filterCol = f.column.includes(".") 
+              ? `${f.column.split(".")[0]}."${f.column.split(".")[1]}"`
+              : `${mainAlias}."${f.column}"`;
+            
+            const paramIndex = params.length + 1;
+            if (f.operator === "eq") {
+              whereClauses.push(`${filterCol} = $${paramIndex}`);
+              params.push(f.value);
+            } else if (f.operator === "contains") {
+              whereClauses.push(`${filterCol}::text ILIKE $${paramIndex}`);
+              params.push(`%${f.value}%`);
+            } else if (f.operator === "gt") {
+              whereClauses.push(`${filterCol} > $${paramIndex}`);
+              params.push(f.value);
+            } else if (f.operator === "gte") {
+              whereClauses.push(`${filterCol} >= $${paramIndex}`);
+              params.push(f.value);
+            } else if (f.operator === "lt") {
+              whereClauses.push(`${filterCol} < $${paramIndex}`);
+              params.push(f.value);
+            } else if (f.operator === "lte") {
+              whereClauses.push(`${filterCol} <= $${paramIndex}`);
+              params.push(f.value);
+            } else if (f.operator === "between" && Array.isArray(f.value) && f.value.length === 2) {
+              whereClauses.push(`${filterCol} >= $${paramIndex} AND ${filterCol} <= $${paramIndex + 1}`);
+              params.push(f.value[0], f.value[1]);
+            }
           });
           query += ` WHERE ${whereClauses.join(" AND ")}`;
         }

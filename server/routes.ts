@@ -639,16 +639,54 @@ async function validateBlockConfig(
     }
   }
   if (kind === "chart") {
-    if (config.xColumn) columnsToValidate.push(config.xColumn);
-    if (config.yColumn) columnsToValidate.push(config.yColumn);
+    // Helper to validate chart columns that may be from joins
+    const validateChartColumn = (col: string) => {
+      if (col.includes(".")) {
+        const result = validateDottedColumn(col);
+        if (!result.valid) {
+          return { valid: false, error: result.error };
+        }
+        if (result.isSubJoin && config.join?.subJoin) {
+          subJoinColumnsToValidate.push(result.colName!);
+        } else {
+          joinColumnsToValidate.push(result.colName!);
+        }
+      } else {
+        columnsToValidate.push(col);
+      }
+      return { valid: true };
+    };
+    
+    if (config.xColumn) {
+      const result = validateChartColumn(config.xColumn);
+      if (!result.valid) return { valid: false, error: result.error };
+    }
+    if (config.yColumn) {
+      const result = validateChartColumn(config.yColumn);
+      if (!result.valid) return { valid: false, error: result.error };
+    }
     // Special date grouping values don't need column validation
     const dateGroupByValues = ["month", "year", "day", "week", "quarter"];
     if (config.groupBy && !dateGroupByValues.includes(config.groupBy.toLowerCase())) {
-      columnsToValidate.push(config.groupBy);
+      const result = validateChartColumn(config.groupBy);
+      if (!result.valid) return { valid: false, error: result.error };
     }
   }
   if (kind === "metric" && config.column) {
-    columnsToValidate.push(config.column);
+    if (config.column.includes(".")) {
+      // Metric column from joined table (e.g., "joined.price")
+      const result = validateDottedColumn(config.column);
+      if (!result.valid) {
+        return { valid: false, error: result.error };
+      }
+      if (result.isSubJoin && config.join?.subJoin) {
+        subJoinColumnsToValidate.push(result.colName!);
+      } else {
+        joinColumnsToValidate.push(result.colName!);
+      }
+    } else {
+      columnsToValidate.push(config.column);
+    }
   }
 
   // Validate filter columns (handle join columns with dots)

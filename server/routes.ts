@@ -3376,12 +3376,13 @@ Always be helpful and explain your suggestions in simple terms.`;
             WHERE date_due >= $1 AND date_due < $2 AND status = 'done'
           `, [weekStartUTC, weekEndUTC]),
           
-          // 6, 7, 8: Revenue metrics for completed bookings
+          // 6, 7, 8: Revenue metrics for completed bookings (including stripe fees)
           pool.query(`
             SELECT 
               COALESCE(AVG(price), 0) as avg_price,
               COALESCE(SUM(price), 0) as total_revenue,
-              COALESCE(SUM(margin), 0) as total_profit
+              COALESCE(SUM(margin), 0) as total_profit,
+              COALESCE(SUM(stripe_fee), 0) as total_stripe_fees
             FROM public.bookings 
             WHERE date_due >= $1 AND date_due < $2 AND status = 'done'
           `, [weekStartUTC, weekEndUTC]),
@@ -3504,6 +3505,7 @@ Always be helpful and explain your suggestions in simple terms.`;
         // Revenue components
         const bookingRevenue = parseFloat(revenueResult.rows[0]?.total_revenue || "0");
         const bookingProfit = parseFloat(revenueResult.rows[0]?.total_profit || "0");
+        const stripeFees = parseFloat(revenueResult.rows[0]?.total_stripe_fees || "0");
         const subscriptionBookingRevenue = parseFloat(subscriptionRevenueResult.rows[0]?.total_revenue || "0");
         const subscriptionBookingProfit = parseFloat(subscriptionRevenueResult.rows[0]?.total_margin || "0");
         const subscriptionFees = parseFloat(subscriptionFeesResult.rows[0]?.total || "0");
@@ -3517,12 +3519,12 @@ Always be helpful and explain your suggestions in simple terms.`;
         // Note: subscriptionBookingRevenue is already included in bookingRevenue (member bookings are a subset of all bookings)
         const subscriptionRevenue = subscriptionBookingRevenue + subscriptionFees;
         
-        // Total Revenue = booking revenue + subscription fees + customer fees + tips + credit packs - refunds
+        // Total Revenue = booking revenue + subscription fees + customer fees + tips + credit packs - refunds - stripe fees
         // (subscriptionBookingRevenue is already part of bookingRevenue, so we only add subscriptionFees)
-        const totalRevenue = bookingRevenue + subscriptionFees + customerFees + tipRevenue + creditPackRevenue - refundsTotal;
+        const totalRevenue = bookingRevenue + subscriptionFees + customerFees + tipRevenue + creditPackRevenue - refundsTotal - stripeFees;
         
         // Debug logging for revenue validation
-        console.log(`[REVENUE DEBUG] ${week.label}: Booking=$${bookingRevenue.toFixed(2)}, SubFees=$${subscriptionFees.toFixed(2)}, CustFees=$${customerFees.toFixed(2)}, Tips=$${tipRevenue.toFixed(2)}, CreditPacks=$${creditPackRevenue.toFixed(2)}, Refunds=$${refundsTotal.toFixed(2)}, TOTAL=$${totalRevenue.toFixed(2)}`);
+        console.log(`[REVENUE DEBUG] ${week.label}: Booking=$${bookingRevenue.toFixed(2)}, SubFees=$${subscriptionFees.toFixed(2)}, CustFees=$${customerFees.toFixed(2)}, Tips=$${tipRevenue.toFixed(2)}, CreditPacks=$${creditPackRevenue.toFixed(2)}, Refunds=$${refundsTotal.toFixed(2)}, StripeFees=$${stripeFees.toFixed(2)}, TOTAL=$${totalRevenue.toFixed(2)}`);
         
         // Gross Profit = booking margin + subscription fees (100% margin) + customer fees (100% margin) + tip profit - refunds
         // (subscriptionBookingProfit is already part of bookingProfit, so we don't add it again)

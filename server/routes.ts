@@ -1340,7 +1340,7 @@ export async function registerRoutes(
   // Fetch rows with pagination and filters
   app.post("/api/rows", isAuthenticated, async (req: Request, res: Response) => {
     try {
-      const { database, table, page = 1, filters = [] } = req.body;
+      const { database, table, page = 1, filters = [], sort } = req.body;
       
       // Check table access for external customers
       const userId = (req.user as any)?.id;
@@ -1386,8 +1386,17 @@ export async function registerRoutes(
         [schema, tableName]
       );
 
-      const orderByColumn =
-        pkResult.rows.length > 0 ? `"${pkResult.rows[0].attname}"` : "ctid";
+      // Determine ORDER BY - use user-specified sort or default to primary key
+      let orderByColumn: string;
+      let orderDirection: string = "ASC";
+      
+      if (sort && sort.column && validColumns.has(sort.column)) {
+        validateIdentifier(sort.column, "sort column");
+        orderByColumn = `"${sort.column}"`;
+        orderDirection = sort.direction === "desc" ? "DESC" : "ASC";
+      } else {
+        orderByColumn = pkResult.rows.length > 0 ? `"${pkResult.rows[0].attname}"` : "ctid";
+      }
 
       // Build WHERE clause
       const whereClauses: string[] = [];
@@ -1444,7 +1453,7 @@ export async function registerRoutes(
       const dataQuery = `
         SELECT * FROM "${schema}"."${tableName}"
         ${whereSQL}
-        ORDER BY ${orderByColumn} ASC
+        ORDER BY ${orderByColumn} ${orderDirection}
         LIMIT ${PAGE_SIZE}
         OFFSET ${offset}
       `;

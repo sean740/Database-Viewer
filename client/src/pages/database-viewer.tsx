@@ -9,7 +9,7 @@ import { TableSidebar } from "@/components/table-sidebar";
 import { ControlBar } from "@/components/control-bar";
 import { DynamicFilter } from "@/components/dynamic-filter";
 import { NLQPanel } from "@/components/nlq-panel";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type SortConfig } from "@/components/data-table";
 import { PaginationControls } from "@/components/pagination-controls";
 import { AdminSettingsModal } from "@/components/admin-settings-modal";
 import { ErrorBanner } from "@/components/error-banner";
@@ -58,12 +58,14 @@ export default function DatabaseViewer() {
   const [isExporting, setIsExporting] = useState(false);
   const [lastNLQPlan, setLastNLQPlan] = useState<NLQPlan | null>(null);
   const [localHiddenColumns, setLocalHiddenColumns] = useState<string[]>([]);
+  const [sort, setSort] = useState<SortConfig | null>(null);
   
-  // Per-table state storage to preserve filters/page/NLQ when switching tables
+  // Per-table state storage to preserve filters/page/NLQ/sort when switching tables
   const [tableStateCache, setTableStateCache] = useState<Record<string, {
     filters: ActiveFilter[];
     page: number;
     nlqPlan: NLQPlan | null;
+    sort: SortConfig | null;
   }>>({})
   
   // Export dialog states
@@ -162,7 +164,7 @@ export default function DatabaseViewer() {
     isLoading: isLoadingRows,
     refetch: refetchRows,
   } = useQuery<QueryResponse>({
-    queryKey: ["/api/rows", selectedDatabase, selectedTable, currentPage, activeFilters],
+    queryKey: ["/api/rows", selectedDatabase, selectedTable, currentPage, activeFilters, sort],
     queryFn: async () => {
       const res = await fetch("/api/rows", {
         method: "POST",
@@ -172,6 +174,7 @@ export default function DatabaseViewer() {
           table: selectedTable,
           page: currentPage,
           filters: activeFilters,
+          sort: sort,
         }),
       });
       if (!res.ok) {
@@ -183,6 +186,24 @@ export default function DatabaseViewer() {
     enabled: !!selectedDatabase && !!selectedTable,
     placeholderData: keepPreviousData,
   });
+
+  // Handle column sort
+  const handleSort = useCallback((column: string) => {
+    setSort((prevSort) => {
+      if (prevSort?.column === column) {
+        // Toggle direction or clear sort
+        if (prevSort.direction === "asc") {
+          return { column, direction: "desc" };
+        } else {
+          return null; // Clear sort on third click
+        }
+      } else {
+        // New column, start with ascending
+        return { column, direction: "asc" };
+      }
+    });
+    setCurrentPage(1); // Reset to page 1 when sorting changes
+  }, []);
 
   // Save filter definitions mutation
   const saveFiltersMutation = useMutation({
@@ -212,12 +233,14 @@ export default function DatabaseViewer() {
   const filtersRef = useRef(activeFilters);
   const pageRef = useRef(currentPage);
   const nlqPlanRef = useRef(lastNLQPlan);
+  const sortRef = useRef(sort);
   const prevTableRef = useRef("");
   
   // Keep refs up to date
   useEffect(() => { filtersRef.current = activeFilters; }, [activeFilters]);
   useEffect(() => { pageRef.current = currentPage; }, [currentPage]);
   useEffect(() => { nlqPlanRef.current = lastNLQPlan; }, [lastNLQPlan]);
+  useEffect(() => { sortRef.current = sort; }, [sort]);
   
   // Save current table state before switching and restore when returning
   useEffect(() => {
@@ -231,6 +254,7 @@ export default function DatabaseViewer() {
           filters: filtersRef.current,
           page: pageRef.current,
           nlqPlan: nlqPlanRef.current,
+          sort: sortRef.current,
         }
       }));
     }
@@ -242,10 +266,12 @@ export default function DatabaseViewer() {
         setActiveFilters(cached.filters);
         setCurrentPage(cached.page);
         setLastNLQPlan(cached.nlqPlan);
+        setSort(cached.sort);
       } else {
         setCurrentPage(1);
         setActiveFilters([]);
         setLastNLQPlan(null);
+        setSort(null);
       }
     }
     
@@ -258,6 +284,7 @@ export default function DatabaseViewer() {
     setCurrentPage(1);
     setActiveFilters([]);
     setLastNLQPlan(null);
+    setSort(null);
     // Clear table cache when database changes
     setTableStateCache({});
   }, [selectedDatabase]);
@@ -522,6 +549,8 @@ export default function DatabaseViewer() {
                 columns={visibleColumns}
                 rows={queryResult?.rows || []}
                 isLoading={isLoadingRows}
+                sort={sort}
+                onSort={handleSort}
               />
             </div>
           </div>

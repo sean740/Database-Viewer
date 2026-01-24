@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { Loader2, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -9,10 +9,17 @@ import {
 } from "@/components/ui/table";
 import type { ColumnInfo } from "@/lib/types";
 
+export interface SortConfig {
+  column: string;
+  direction: "asc" | "desc";
+}
+
 interface DataTableProps {
   columns: ColumnInfo[];
   rows: Record<string, unknown>[];
   isLoading: boolean;
+  sort?: SortConfig | null;
+  onSort?: (column: string) => void;
 }
 
 function formatCellValue(value: unknown): string {
@@ -24,7 +31,7 @@ function formatCellValue(value: unknown): string {
   return String(value);
 }
 
-export function DataTable({ columns, rows, isLoading }: DataTableProps) {
+export function DataTable({ columns, rows, isLoading, sort, onSort }: DataTableProps) {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -55,20 +62,41 @@ export function DataTable({ columns, rows, isLoading }: DataTableProps) {
         <Table className="min-w-max">
           <TableHeader className="sticky top-0 bg-card z-10">
             <TableRow>
-              {columns.map((col) => (
-                <TableHead
-                  key={col.name}
-                  className="min-w-[120px] font-medium whitespace-nowrap"
-                >
-                  <div className="flex flex-col">
-                    <span className="font-mono text-sm">{col.name}</span>
-                    <span className="text-xs text-muted-foreground font-normal">
-                      {col.dataType}
-                      {col.isPrimaryKey && " (PK)"}
-                    </span>
-                  </div>
-                </TableHead>
-              ))}
+              {columns.map((col) => {
+                const isSorted = sort?.column === col.name;
+                const sortDirection = isSorted ? sort.direction : null;
+                
+                return (
+                  <TableHead
+                    key={col.name}
+                    className="min-w-[120px] font-medium whitespace-nowrap"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSort?.(col.name)}
+                      className="flex flex-col items-start w-full text-left hover:bg-muted/50 rounded px-1 py-0.5 -mx-1 transition-colors"
+                      data-testid={`sort-column-${col.name}`}
+                    >
+                      <div className="flex items-center gap-1">
+                        <span className="font-mono text-sm">{col.name}</span>
+                        {isSorted ? (
+                          sortDirection === "asc" ? (
+                            <ArrowUp className="h-3 w-3 text-primary" />
+                          ) : (
+                            <ArrowDown className="h-3 w-3 text-primary" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="h-3 w-3 text-muted-foreground opacity-50" />
+                        )}
+                      </div>
+                      <span className="text-xs text-muted-foreground font-normal">
+                        {col.dataType}
+                        {col.isPrimaryKey && " (PK)"}
+                      </span>
+                    </button>
+                  </TableHead>
+                );
+              })}
             </TableRow>
           </TableHeader>
           <TableBody>

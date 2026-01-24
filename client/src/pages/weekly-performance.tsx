@@ -1,12 +1,14 @@
-import { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect, useRef } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, DollarSign, Users, BarChart3, Percent } from "lucide-react";
+import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, DollarSign, Users, BarChart3, Percent, MessageCircle, Send, X, Bot, User } from "lucide-react";
 import { Header } from "@/components/header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/hooks/use-toast";
 import {
   Table,
   TableBody,
@@ -23,7 +25,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { apiRequest } from "@/lib/queryClient";
 import type { DatabaseConnection } from "@/lib/types";
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: Date;
+}
 
 interface WeekMetrics {
   bookingsCreated: number;
@@ -147,6 +156,11 @@ function CategoryIcon({ category }: { category: string }) {
 export default function WeeklyPerformance() {
   const [selectedDatabase, setSelectedDatabase] = useState<string>("");
   const [selectedWeekIndex, setSelectedWeekIndex] = useState<number>(0);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
   
   const { data: databases = [], isLoading: databasesLoading } = useQuery<DatabaseConnection[]>({
     queryKey: ["/api/databases"],
@@ -183,6 +197,53 @@ export default function WeeklyPerformance() {
   
   // Group metrics by category
   const categories = ["Bookings", "Revenue", "Users", "Membership"];
+  
+  // AI Chat mutation
+  const chatMutation = useMutation({
+    mutationFn: async (message: string) => {
+      const response = await apiRequest("POST", `/api/weekly-performance/${selectedDatabase}/chat`, {
+        message,
+        dashboardData: performanceData,
+      });
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setChatMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: data.message, timestamp: new Date() },
+      ]);
+      scrollChatToBottom();
+    },
+    onError: (error) => {
+      toast({
+        title: "Chat Error",
+        description: error instanceof Error ? error.message : "Failed to get AI response. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+  
+  const scrollChatToBottom = () => {
+    setTimeout(() => {
+      chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: "smooth" });
+    }, 100);
+  };
+  
+  const handleSendMessage = (messageOverride?: string) => {
+    const messageToSend = messageOverride || chatInput.trim();
+    if (!messageToSend || chatMutation.isPending) return;
+    
+    const userMessage: ChatMessage = {
+      role: "user",
+      content: messageToSend,
+      timestamp: new Date(),
+    };
+    
+    setChatMessages((prev) => [...prev, userMessage]);
+    setChatInput("");
+    chatMutation.mutate(messageToSend);
+    scrollChatToBottom();
+  };
   
   return (
     <div className="h-screen flex flex-col bg-background">
@@ -375,6 +436,142 @@ export default function WeeklyPerformance() {
           </div>
         )}
       </div>
+      
+      {/* AI Chat Button */}
+      {selectedDatabase && !isChatOpen && (
+        <Button
+          onClick={() => setIsChatOpen(true)}
+          className="fixed bottom-6 right-6 shadow-lg z-50"
+          size="icon"
+          data-testid="button-open-chat"
+        >
+          <MessageCircle className="h-5 w-5" />
+        </Button>
+      )}
+      
+      {/* AI Chat Panel */}
+      {isChatOpen && (
+        <div className="fixed bottom-6 right-6 w-96 h-[500px] bg-card border rounded-lg shadow-xl z-50 flex flex-col">
+          <div className="flex items-center justify-between p-4 border-b">
+            <div className="flex items-center gap-2">
+              <Bot className="h-5 w-5 text-primary" />
+              <span className="font-semibold">Dashboard Assistant</span>
+            </div>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              onClick={() => setIsChatOpen(false)}
+              data-testid="button-close-chat"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          
+          <div 
+            ref={chatScrollRef}
+            className="flex-1 overflow-y-auto p-4 space-y-4"
+          >
+            {chatMessages.length === 0 && (
+              <div className="text-center text-muted-foreground text-sm py-8">
+                <Bot className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p className="font-medium">Ask about your dashboard</p>
+                <p className="text-xs mt-2">
+                  I can help you understand metrics, compare weeks, and identify trends.
+                </p>
+                <div className="mt-4 space-y-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleSendMessage("How is this week performing compared to last week?")}
+                    className="w-full justify-start text-xs h-auto py-2 whitespace-normal text-left"
+                    data-testid="button-suggestion-compare"
+                  >
+                    "How is this week performing compared to last week?"
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleSendMessage("What are the key insights from the current data?")}
+                    className="w-full justify-start text-xs h-auto py-2 whitespace-normal text-left"
+                    data-testid="button-suggestion-insights"
+                  >
+                    "What are the key insights from the current data?"
+                  </Button>
+                </div>
+              </div>
+            )}
+            
+            {chatMessages.map((msg, index) => (
+              <div
+                key={index}
+                className={cn(
+                  "flex gap-2",
+                  msg.role === "user" ? "justify-end" : "justify-start"
+                )}
+              >
+                {msg.role === "assistant" && (
+                  <div className="flex-shrink-0 h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+                    <Bot className="h-4 w-4 text-primary" />
+                  </div>
+                )}
+                <div
+                  className={cn(
+                    "max-w-[80%] rounded-lg px-3 py-2 text-sm",
+                    msg.role === "user"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted"
+                  )}
+                >
+                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                </div>
+                {msg.role === "user" && (
+                  <div className="flex-shrink-0 h-8 w-8 rounded-full bg-primary flex items-center justify-center">
+                    <User className="h-4 w-4 text-primary-foreground" />
+                  </div>
+                )}
+              </div>
+            ))}
+            
+            {chatMutation.isPending && (
+              <div className="flex gap-2 justify-start">
+                <div className="flex-shrink-0 h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+                  <Bot className="h-4 w-4 text-primary" />
+                </div>
+                <div className="bg-muted rounded-lg px-3 py-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                </div>
+              </div>
+            )}
+          </div>
+          
+          <div className="p-4 border-t">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendMessage();
+              }}
+              className="flex gap-2"
+            >
+              <Input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Ask about the dashboard..."
+                disabled={chatMutation.isPending || !selectedDatabase}
+                className="flex-1"
+                data-testid="input-chat-message"
+              />
+              <Button 
+                type="submit" 
+                size="icon"
+                disabled={!chatInput.trim() || chatMutation.isPending}
+                data-testid="button-send-chat"
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

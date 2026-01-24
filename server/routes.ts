@@ -3747,6 +3747,113 @@ Always be helpful and explain your suggestions in simple terms.`;
     }
   });
 
+  // Weekly Performance Dashboard AI Chat
+  app.post("/api/weekly-performance/:database/chat", isAuthenticated, reportAILimiter, async (req, res) => {
+    try {
+      const { database } = req.params;
+      const { message, dashboardData } = req.body;
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      
+      if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      
+      if (!message) {
+        return res.status(400).json({ error: "Message is required" });
+      }
+      
+      const client = getOpenAIClient();
+      if (!client) {
+        return res.status(503).json({ error: "AI service not available" });
+      }
+      
+      // Build context about the dashboard data
+      const metricsContext = dashboardData?.weeks?.length > 0 
+        ? `The dashboard currently shows ${dashboardData.weeks.length} weeks of data.
+          
+The most recent week (${dashboardData.weeks[0]?.weekLabel || 'Current'}) has these metrics:
+${JSON.stringify(dashboardData.weeks[0]?.metrics || {}, null, 2)}
+
+${dashboardData.weeks[0]?.variance ? `Week-over-week variance (% change, or percentage point change for rates):
+${JSON.stringify(dashboardData.weeks[0].variance, null, 2)}` : ''}
+
+${dashboardData.weeks.length > 1 ? `Previous week (${dashboardData.weeks[1]?.weekLabel}) metrics:
+${JSON.stringify(dashboardData.weeks[1]?.metrics || {}, null, 2)}` : ''}
+`
+        : "No dashboard data is currently loaded.";
+      
+      const systemPrompt = `You are an AI assistant for the WashOS Weekly Marketing Performance Dashboard. Your role is to help users understand and analyze their weekly business metrics.
+
+DASHBOARD CONTEXT:
+The Weekly Marketing Performance Dashboard tracks these key metrics week over week (Monday-Sunday, Pacific Time):
+
+BOOKINGS:
+- Bookings Created: Number of new bookings created during the week
+- Bookings Due: Number of bookings scheduled to be completed during the week
+- Bookings Completed: Number of bookings marked as done during the week
+- Avg Per Day: Average number of completed bookings per day
+- Conversion (Done/Due): Percentage of due bookings that were completed
+
+REVENUE:
+- Avg Booking Price: Average price per completed booking
+- Total Revenue: Sum of booking revenue + subscription fees + customer fees + tips + credit pack purchases - refunds - Stripe fees
+- Gross Profit: Booking margin + subscription fees + customer fees + tip profit - refunds
+- Margin %: Gross profit as a percentage of total revenue
+
+USERS:
+- Sign Ups: Number of new user registrations
+- New Users (w/ Booking): Users who signed up AND made at least one booking ever
+- New User Conversion: Percentage of signups that have made a booking
+
+MEMBERSHIP:
+- Subscription Revenue: Revenue from active subscriptions
+- Subscription Fees: Fees collected from subscription plans
+- Member Bookings: Bookings made by users with active subscriptions
+- % Revenue from Members: Subscription revenue as percentage of total revenue
+- New Memberships: Number of new subscription signups
+
+CURRENT DATA:
+${metricsContext}
+
+INSTRUCTIONS:
+1. Answer questions about the metrics, trends, and performance
+2. Help users understand what the numbers mean and provide insights
+3. Compare weeks when relevant data is available
+4. Explain variances and what might be driving changes
+5. Be concise but informative
+6. If asked about data not shown on the dashboard, explain that you can only analyze the displayed metrics
+7. Format numbers appropriately (currency with $, percentages with %, etc.)
+8. When discussing variance, positive changes are generally good for revenue/bookings/users metrics`;
+
+      const response = await client.chat.completions.create({
+        model: AI_CONFIG.reportChat.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: message }
+        ],
+        temperature: 0.7,
+        max_tokens: 1000,
+      });
+      
+      const assistantMessage = response.choices[0]?.message?.content || "I apologize, but I couldn't generate a response. Please try again.";
+      
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "WEEKLY_PERFORMANCE_AI_CHAT",
+        database,
+        details: `AI chat message: ${message.substring(0, 100)}...`,
+        ip: req.ip || undefined,
+      });
+      
+      res.json({ message: assistantMessage });
+    } catch (err) {
+      console.error("Error in weekly performance AI chat:", err);
+      res.status(500).json({ error: "Failed to process AI request" });
+    }
+  });
+
   // Get available report templates
   app.get("/api/reports/templates", isAuthenticated, async (req, res) => {
     const templates = [

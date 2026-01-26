@@ -103,6 +103,11 @@ filters.json       # Admin-configured filter definitions (per table)
 - Handles PST/PDT timezone correctly for week boundaries
 - Week boundaries: Monday 00:00:00 PST to next Monday 00:00:00 PST (exclusive)
 - **AI Chat Assistant**: Floating chat button in bottom-right corner allows users to ask questions about their dashboard data and get AI-powered insights
+  - **Drill-down capability**: When users ask "show me the data" or similar, AI can retrieve the actual database rows that contribute to any metric
+  - **Data preview**: Shows first 10 rows inline in chat with full column data
+  - **CSV export**: Download button exports up to 10,000 rows for deeper analysis
+  - **Revenue breakdown**: Can drill into individual revenue sources (bookings, tips, subscriptions, refunds, credit packs, Stripe fees)
+  - **Role restricted**: Drill-down access limited to Admin and WashOS User roles only
 
 #### Revenue Calculation Details
 - **Total Revenue** = Booking Revenue + Subscription Fees + Customer Fees + Tips + Credit Packs - Refunds - Stripe Fees

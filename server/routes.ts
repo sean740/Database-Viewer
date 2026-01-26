@@ -3591,11 +3591,13 @@ Always be helpful and explain your suggestions in simple terms.`;
             ) unique_bookings
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
           
-          // Customer fees charged in the week
+          // Customer fees charged in the week (exclude waived fees and those without charge_id)
           pool.query(`
             SELECT COALESCE(SUM(amount), 0) as total
             FROM public.customer_fees
             WHERE created_at >= $1 AND created_at < $2
+              AND (waived IS NULL OR waived != true)
+              AND charge_id IS NOT NULL AND charge_id != ''
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
           
           // Tips from booking_tips where tip was created in the week

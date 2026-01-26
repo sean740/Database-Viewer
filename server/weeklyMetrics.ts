@@ -188,12 +188,14 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
         id: "customerFees",
         name: "Customer Fees",
         getDrilldownQuery: (weekStart, weekEnd) => ({
-          sql: `SELECT id, amount, created_at
+          sql: `SELECT id, amount, charge_id, waived, created_at
                 FROM public.customer_fees
                 WHERE created_at >= $1 AND created_at < $2
+                  AND (waived IS NULL OR waived != true)
+                  AND charge_id IS NOT NULL AND charge_id != ''
                 ORDER BY created_at DESC`,
           params: [weekStart, weekEnd],
-          columns: ["id", "amount", "created_at"],
+          columns: ["id", "amount", "charge_id", "waived", "created_at"],
         }),
       },
       {
@@ -307,12 +309,14 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
         id: "customerFees",
         name: "Customer Fees (100% margin)",
         getDrilldownQuery: (weekStart, weekEnd) => ({
-          sql: `SELECT id, amount, created_at
+          sql: `SELECT id, amount, charge_id, waived, created_at
                 FROM public.customer_fees
                 WHERE created_at >= $1 AND created_at < $2
+                  AND (waived IS NULL OR waived != true)
+                  AND charge_id IS NOT NULL AND charge_id != ''
                 ORDER BY created_at DESC`,
           params: [weekStart, weekEnd],
-          columns: ["id", "amount", "created_at"],
+          columns: ["id", "amount", "charge_id", "waived", "created_at"],
         }),
       },
       {

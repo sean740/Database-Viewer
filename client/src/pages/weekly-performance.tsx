@@ -418,15 +418,15 @@ export default function WeeklyPerformance() {
                             key={week.weekLabel} 
                             className={cn(
                               "cursor-pointer transition-colors hover-elevate",
-                              index === selectedWeekIndex && "bg-accent/50",
-                              index === 0 && index !== selectedWeekIndex && "bg-muted/30"
+                              index === selectedWeekIndex && "bg-accent",
+                              index === 0 && index !== selectedWeekIndex && "bg-muted"
                             )}
                             onClick={() => setSelectedWeekIndex(index)}
                             data-testid={`row-week-${index}`}
                           >
                             <TableCell className={cn(
                               "sticky left-0 z-10 font-medium",
-                              index === selectedWeekIndex ? "bg-accent/50" : index === 0 ? "bg-muted/30" : "bg-card"
+                              index === selectedWeekIndex ? "bg-accent" : index === 0 ? "bg-muted" : "bg-card"
                             )}>
                               <div className="flex flex-col">
                                 <span>{week.weekLabel}</span>

@@ -355,7 +355,16 @@
   },
   "Default:public.subscriptions": {
     "isVisible": true,
-    "displayName": "Subscriptions"
+    "displayName": "Subscriptions",
+    "hiddenColumns": [
+      "product_id",
+      "card_id",
+      "stripe_id",
+      "paused_at",
+      "created_at",
+      "cancellation_reason",
+      "cancellation_comment"
+    ]
   },
   "Default:public.surge_price_levels": {
     "isVisible": false,

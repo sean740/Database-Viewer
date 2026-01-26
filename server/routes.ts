@@ -3852,7 +3852,12 @@ ${canDrillDown ? `DRILL-DOWN CAPABILITY:
 You have access to tools to fetch the actual database rows that make up each metric.
 When users ask "what went into this number", "show me the details", "export the data", or want to see the underlying rows, use the get_metric_rows tool.
 When users ask "how is this calculated", use the get_metric_details tool for the exact formula.
-For revenue metrics with multiple sources (totalRevenue, totalProfit), you can drill down into specific sources like bookingRevenue, subscriptionFees, tips, refunds, etc.` : 'Note: Drill-down to underlying data rows is not available for this user role.'}
+For revenue metrics with multiple sources (totalRevenue, totalProfit), you can drill down into specific sources like bookingRevenue, subscriptionFees, tips, refunds, etc.
+
+IMPORTANT FOR BREAKDOWNS: When a user asks to "break down" a metric with sub-sources, you should make SEPARATE calls to get_metric_rows for EACH sub-source. For example:
+- subscriptionFees has sub-sources: "invoiceFees" (recurring invoice payments) and "cancellationFees" ($59 cancellation fees)
+- To break down subscription fees, call get_metric_rows TWICE: once with subSourceId="invoiceFees" and once with subSourceId="cancellationFees"
+- Then present both results to show the complete breakdown.` : 'Note: Drill-down to underlying data rows is not available for this user role.'}
 
 INSTRUCTIONS:
 1. Answer questions about the metrics, trends, and performance

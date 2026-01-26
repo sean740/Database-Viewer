@@ -9,17 +9,19 @@ import {
 } from "@/components/ui/table";
 import type { ColumnInfo } from "@/lib/types";
 
-export interface SortConfig {
+export interface SortColumn {
   column: string;
   direction: "asc" | "desc";
 }
+
+export type SortConfig = SortColumn[];
 
 interface DataTableProps {
   columns: ColumnInfo[];
   rows: Record<string, unknown>[];
   isLoading: boolean;
   sort?: SortConfig | null;
-  onSort?: (column: string) => void;
+  onSort?: (column: string, isMultiSort: boolean) => void;
 }
 
 function formatCellValue(value: unknown): string {
@@ -63,8 +65,11 @@ export function DataTable({ columns, rows, isLoading, sort, onSort }: DataTableP
           <TableHeader className="sticky top-0 bg-card z-10">
             <TableRow>
               {columns.map((col) => {
-                const isSorted = sort?.column === col.name;
-                const sortDirection = isSorted ? sort.direction : null;
+                const sortIndex = sort?.findIndex(s => s.column === col.name) ?? -1;
+                const isSorted = sortIndex >= 0;
+                const sortDirection = isSorted ? sort![sortIndex].direction : null;
+                const sortOrder = isSorted ? sortIndex + 1 : null;
+                const isMultiSort = (sort?.length ?? 0) > 1;
                 
                 return (
                   <TableHead
@@ -73,18 +78,24 @@ export function DataTable({ columns, rows, isLoading, sort, onSort }: DataTableP
                   >
                     <button
                       type="button"
-                      onClick={() => onSort?.(col.name)}
+                      onClick={(e) => onSort?.(col.name, e.shiftKey)}
                       className="flex flex-col items-start w-full text-left hover:bg-muted/50 rounded px-1 py-0.5 -mx-1 transition-colors"
                       data-testid={`sort-column-${col.name}`}
+                      title="Click to sort, Shift+click to add to multi-sort"
                     >
                       <div className="flex items-center gap-1">
                         <span className="font-mono text-sm">{col.name}</span>
                         {isSorted ? (
-                          sortDirection === "asc" ? (
-                            <ArrowUp className="h-3 w-3 text-primary" />
-                          ) : (
-                            <ArrowDown className="h-3 w-3 text-primary" />
-                          )
+                          <span className="flex items-center">
+                            {sortDirection === "asc" ? (
+                              <ArrowUp className="h-3 w-3 text-primary" />
+                            ) : (
+                              <ArrowDown className="h-3 w-3 text-primary" />
+                            )}
+                            {isMultiSort && (
+                              <span className="text-[10px] text-primary font-bold ml-0.5">{sortOrder}</span>
+                            )}
+                          </span>
                         ) : (
                           <ArrowUpDown className="h-3 w-3 text-muted-foreground opacity-50" />
                         )}

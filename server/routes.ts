@@ -1425,15 +1425,27 @@ export async function registerRoutes(
       );
 
       // Determine ORDER BY - use user-specified sort or default to primary key
-      let orderByColumn: string;
-      let orderDirection: string = "ASC";
+      // Support multi-column sorting (sort is now an array)
+      let orderByClause: string;
       
-      if (sort && sort.column && validColumns.has(sort.column)) {
-        validateIdentifier(sort.column, "sort column");
-        orderByColumn = `"${sort.column}"`;
-        orderDirection = sort.direction === "desc" ? "DESC" : "ASC";
+      if (sort && Array.isArray(sort) && sort.length > 0) {
+        // Multi-column sort
+        const sortParts: string[] = [];
+        for (const sortItem of sort) {
+          if (sortItem.column && validColumns.has(sortItem.column)) {
+            validateIdentifier(sortItem.column, "sort column");
+            const direction = sortItem.direction === "desc" ? "DESC" : "ASC";
+            sortParts.push(`"${sortItem.column}" ${direction}`);
+          }
+        }
+        if (sortParts.length > 0) {
+          orderByClause = sortParts.join(", ");
+        } else {
+          orderByClause = pkResult.rows.length > 0 ? `"${pkResult.rows[0].attname}"` : "ctid";
+        }
       } else {
-        orderByColumn = pkResult.rows.length > 0 ? `"${pkResult.rows[0].attname}"` : "ctid";
+        // Default to primary key
+        orderByClause = pkResult.rows.length > 0 ? `"${pkResult.rows[0].attname}"` : "ctid";
       }
 
       // Build WHERE clause
@@ -1491,7 +1503,7 @@ export async function registerRoutes(
       const dataQuery = `
         SELECT * FROM "${schema}"."${tableName}"
         ${whereSQL}
-        ORDER BY ${orderByColumn} ${orderDirection}
+        ORDER BY ${orderByClause}
         LIMIT ${PAGE_SIZE}
         OFFSET ${offset}
       `;

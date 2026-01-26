@@ -82,5 +82,19 @@
       }
     ],
     "lastUsedAt": "2026-01-23T23:12:12.251Z"
+  },
+  {
+    "id": "ifppgadcq8ed9idf83me5i",
+    "userId": "084c4fe4-5982-45f3-9505-a29c409c3131",
+    "database": "Default",
+    "table": "public.booking_ratings",
+    "filters": [
+      {
+        "column": "id",
+        "operator": "gt",
+        "value": "113700"
+      }
+    ],
+    "lastUsedAt": "2026-01-26T19:18:30.927Z"
   }
 ]

@@ -115,6 +115,12 @@ filters.json       # Admin-configured filter definitions (per table)
   - Tip Profit: `tip_amount - vendor_amount` from `booking_tips`
 - **New Users (w/Booking)**: Users who signed up in the week AND have at least one booking ever (any time)
 
+### Multi-Column Sorting
+- Click column headers to sort ascending (↑) → descending (↓) → clear
+- **Shift+click** to add additional columns to the sort (multi-column sorting)
+- Sort order numbers appear next to columns when multiple are sorted
+- Sort state persists when switching tables, resets on database change
+
 ### Read-Only Safety
 - Only SELECT queries are executed
 - All identifiers (schema, table, column names) are validated with strict regex

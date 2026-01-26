@@ -9,7 +9,7 @@ import { TableSidebar } from "@/components/table-sidebar";
 import { ControlBar } from "@/components/control-bar";
 import { DynamicFilter } from "@/components/dynamic-filter";
 import { NLQPanel } from "@/components/nlq-panel";
-import { DataTable, type SortConfig } from "@/components/data-table";
+import { DataTable, type SortConfig, type SortColumn } from "@/components/data-table";
 import { PaginationControls } from "@/components/pagination-controls";
 import { AdminSettingsModal } from "@/components/admin-settings-modal";
 import { ErrorBanner } from "@/components/error-banner";
@@ -187,19 +187,43 @@ export default function DatabaseViewer() {
     placeholderData: keepPreviousData,
   });
 
-  // Handle column sort
-  const handleSort = useCallback((column: string) => {
+  // Handle column sort (supports multi-column sorting with Shift+click)
+  const handleSort = useCallback((column: string, isMultiSort: boolean) => {
     setSort((prevSort) => {
-      if (prevSort?.column === column) {
-        // Toggle direction or clear sort
-        if (prevSort.direction === "asc") {
-          return { column, direction: "desc" };
+      const currentSort = prevSort || [];
+      const existingIndex = currentSort.findIndex(s => s.column === column);
+      
+      if (isMultiSort) {
+        // Multi-sort mode: add/toggle/remove column from sort array
+        if (existingIndex >= 0) {
+          const existing = currentSort[existingIndex];
+          if (existing.direction === "asc") {
+            // Toggle to desc
+            const newSort = [...currentSort];
+            newSort[existingIndex] = { column, direction: "desc" };
+            return newSort;
+          } else {
+            // Remove from sort
+            const newSort = currentSort.filter((_, i) => i !== existingIndex);
+            return newSort.length > 0 ? newSort : null;
+          }
         } else {
-          return null; // Clear sort on third click
+          // Add new column to sort
+          return [...currentSort, { column, direction: "asc" }];
         }
       } else {
-        // New column, start with ascending
-        return { column, direction: "asc" };
+        // Single sort mode: replace all sorting with this column
+        if (existingIndex >= 0 && currentSort.length === 1) {
+          const existing = currentSort[0];
+          if (existing.direction === "asc") {
+            return [{ column, direction: "desc" }];
+          } else {
+            return null; // Clear sort on third click
+          }
+        } else {
+          // New column or switching from multi-sort, start with ascending
+          return [{ column, direction: "asc" }];
+        }
       }
     });
     setCurrentPage(1); // Reset to page 1 when sorting changes

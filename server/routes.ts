@@ -3786,7 +3786,14 @@ Always be helpful and explain your suggestions in simple terms.`;
       // Import metric specs
       const { METRIC_SPECS, getAllMetricSpecs } = await import("./weeklyMetrics");
       
-      // Build context about the dashboard data
+      // Build context about the dashboard data with explicit week dates
+      const currentYear = new Date().getFullYear();
+      const availableWeeksContext = dashboardData?.weeks?.length > 0
+        ? `Available weeks with their EXACT date ranges (use these dates for drill-down):\n${dashboardData.weeks.map((w: any) => 
+            `- "${w.weekLabel}": weekStart="${w.weekStart}", weekEnd="${w.weekEnd}"`
+          ).join('\n')}`
+        : '';
+      
       const metricsContext = dashboardData?.weeks?.length > 0 
         ? `The dashboard currently shows ${dashboardData.weeks.length} weeks of data.
           
@@ -3808,6 +3815,8 @@ ${JSON.stringify(dashboardData.weeks[1]?.metrics || {}, null, 2)}` : ''}
       
       const systemPrompt = `You are an AI assistant for the WashOS Weekly Marketing Performance Dashboard. Your role is to help users understand and analyze their weekly business metrics.
 
+IMPORTANT: The current year is ${currentYear}. When users mention dates like "Jan 12-18", they mean ${currentYear}, NOT any other year.
+
 DASHBOARD CONTEXT:
 The Weekly Marketing Performance Dashboard tracks these key metrics week over week (Monday-Sunday, Pacific Time):
 
@@ -3818,6 +3827,10 @@ CURRENT DATA:
 ${metricsContext}
 
 ${selectedWeek ? `SELECTED WEEK: ${selectedWeek.weekLabel} (${selectedWeek.weekStart} to ${selectedWeek.weekEnd})` : ''}
+
+${availableWeeksContext}
+
+CRITICAL: When calling get_metric_rows, you MUST use the EXACT weekStart and weekEnd values from the available weeks list above. Look up the week label the user mentions (e.g., "Jan 12 - 18") and use its corresponding weekStart and weekEnd values. Do NOT make up date values.
 
 ${canDrillDown ? `DRILL-DOWN CAPABILITY:
 You have access to tools to fetch the actual database rows that make up each metric.

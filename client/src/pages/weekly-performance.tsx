@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, DollarSign, Users, BarChart3, Percent, MessageCircle, Send, X, Bot, User } from "lucide-react";
+import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, DollarSign, Users, BarChart3, Percent, MessageCircle, Send, X, Bot, User, Download, Table2 } from "lucide-react";
 import { Header } from "@/components/header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,10 +28,24 @@ import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
 import type { DatabaseConnection } from "@/lib/types";
 
+interface DrilldownData {
+  metricId: string;
+  subSourceId?: string;
+  metricName: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  totalCount: number;
+  previewCount: number;
+  hasMore: boolean;
+  weekStart: string;
+  weekEnd: string;
+}
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  drilldownData?: DrilldownData[];
 }
 
 interface WeekMetrics {
@@ -198,19 +212,32 @@ export default function WeeklyPerformance() {
   // Group metrics by category
   const categories = ["Bookings", "Revenue", "Users", "Membership"];
   
+  // Get the currently selected week data
+  const selectedWeekData = performanceData?.weeks?.[selectedWeekIndex];
+  
   // AI Chat mutation
   const chatMutation = useMutation({
     mutationFn: async (message: string) => {
       const response = await apiRequest("POST", `/api/weekly-performance/${selectedDatabase}/chat`, {
         message,
         dashboardData: performanceData,
+        selectedWeek: selectedWeekData ? {
+          weekLabel: selectedWeekData.weekLabel,
+          weekStart: selectedWeekData.weekStart,
+          weekEnd: selectedWeekData.weekEnd,
+        } : undefined,
       });
       return response.json();
     },
     onSuccess: (data) => {
       setChatMessages((prev) => [
         ...prev,
-        { role: "assistant", content: data.message, timestamp: new Date() },
+        { 
+          role: "assistant", 
+          content: data.message, 
+          timestamp: new Date(),
+          drilldownData: data.drilldownData,
+        },
       ]);
       scrollChatToBottom();
     },
@@ -222,6 +249,19 @@ export default function WeeklyPerformance() {
       });
     },
   });
+  
+  // CSV export handler
+  const handleExportCSV = (drilldown: DrilldownData) => {
+    const params = new URLSearchParams({
+      metricId: drilldown.metricId,
+      weekStart: drilldown.weekStart,
+      weekEnd: drilldown.weekEnd,
+    });
+    if (drilldown.subSourceId) {
+      params.set("subSourceId", drilldown.subSourceId);
+    }
+    window.open(`/api/weekly-performance/${selectedDatabase}/drilldown-export?${params.toString()}`, "_blank");
+  };
   
   const scrollChatToBottom = () => {
     setTimeout(() => {
@@ -516,13 +556,95 @@ export default function WeeklyPerformance() {
                 )}
                 <div
                   className={cn(
-                    "max-w-[80%] rounded-lg px-3 py-2 text-sm",
+                    "max-w-[85%] rounded-lg px-3 py-2 text-sm",
                     msg.role === "user"
                       ? "bg-primary text-primary-foreground"
                       : "bg-muted"
                   )}
                 >
                   <p className="whitespace-pre-wrap">{msg.content}</p>
+                  
+                  {msg.drilldownData && msg.drilldownData.length > 0 && (
+                    <div className="mt-3 space-y-3" data-testid="drilldown-container">
+                      {msg.drilldownData.map((drilldown, dIdx) => (
+                        <div 
+                          key={dIdx} 
+                          className="border rounded bg-background p-2"
+                          data-testid={`drilldown-preview-${drilldown.metricId}-${dIdx}`}
+                        >
+                          <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                            <div className="flex items-center gap-2">
+                              <Table2 className="h-3 w-3 text-muted-foreground" />
+                              <span className="text-xs font-medium" data-testid={`text-metric-name-${drilldown.metricId}`}>
+                                {drilldown.metricName}
+                                {drilldown.subSourceId && ` (${drilldown.subSourceId})`}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground" data-testid={`text-row-count-${drilldown.metricId}`}>
+                                {drilldown.previewCount} of {drilldown.totalCount} rows
+                              </span>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleExportCSV(drilldown)}
+                                className="text-xs gap-1"
+                                data-testid={`button-export-csv-${drilldown.metricId}`}
+                              >
+                                <Download className="h-3 w-3" />
+                                CSV
+                              </Button>
+                            </div>
+                          </div>
+                          
+                          <div className="overflow-x-auto max-h-40 border rounded">
+                            <Table className="text-xs">
+                              <TableHeader>
+                                <TableRow>
+                                  {drilldown.columns.map((col) => (
+                                    <TableHead 
+                                      key={col} 
+                                      className="text-xs p-1 font-medium"
+                                      data-testid={`header-${drilldown.metricId}-${col}`}
+                                    >
+                                      {col}
+                                    </TableHead>
+                                  ))}
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {drilldown.rows.slice(0, 10).map((row, rIdx) => (
+                                  <TableRow key={rIdx} data-testid={`row-${drilldown.metricId}-${rIdx}`}>
+                                    {drilldown.columns.map((col) => (
+                                      <TableCell 
+                                        key={col} 
+                                        className="p-1 truncate max-w-[100px] text-xs" 
+                                        title={String(row[col] ?? "")}
+                                        data-testid={`cell-${drilldown.metricId}-${rIdx}-${col}`}
+                                      >
+                                        {row[col] === null ? <span className="text-muted-foreground italic">NULL</span> : String(row[col] ?? "")}
+                                      </TableCell>
+                                    ))}
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                            {drilldown.rows.length > 10 && (
+                              <p className="text-xs text-muted-foreground text-center py-1">
+                                Showing first 10 of {drilldown.previewCount} preview rows...
+                              </p>
+                            )}
+                          </div>
+                          
+                          {drilldown.hasMore && (
+                            <p className="text-xs text-muted-foreground mt-1" data-testid={`text-has-more-${drilldown.metricId}`}>
+                              Download CSV to see all {drilldown.totalCount} rows
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {msg.role === "user" && (
                   <div className="flex-shrink-0 h-8 w-8 rounded-full bg-primary flex items-center justify-center">

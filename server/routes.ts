@@ -3763,7 +3763,7 @@ Always be helpful and explain your suggestions in simple terms.`;
   app.post("/api/weekly-performance/:database/chat", isAuthenticated, reportAILimiter, async (req, res) => {
     try {
       const { database } = req.params;
-      const { message, dashboardData } = req.body;
+      const { message, dashboardData, selectedWeek } = req.body;
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       
@@ -3780,6 +3780,12 @@ Always be helpful and explain your suggestions in simple terms.`;
         return res.status(503).json({ error: "AI service not available" });
       }
       
+      // Check if user can drill down (Admin or WashOS User only)
+      const canDrillDown = user.role === "admin" || user.role === "washos_user";
+      
+      // Import metric specs
+      const { METRIC_SPECS, getAllMetricSpecs } = await import("./weeklyMetrics");
+      
       // Build context about the dashboard data
       const metricsContext = dashboardData?.weeks?.length > 0 
         ? `The dashboard currently shows ${dashboardData.weeks.length} weeks of data.
@@ -3795,38 +3801,29 @@ ${JSON.stringify(dashboardData.weeks[1]?.metrics || {}, null, 2)}` : ''}
 `
         : "No dashboard data is currently loaded.";
       
+      // Build metric specs context for AI
+      const metricSpecsList = getAllMetricSpecs().map(m => 
+        `- ${m.name} (id: ${m.id}): ${m.description}\n  Formula: ${m.formula}${m.subSources ? `\n  Sub-sources: ${m.subSources.map(s => s.name).join(", ")}` : ""}`
+      ).join("\n\n");
+      
       const systemPrompt = `You are an AI assistant for the WashOS Weekly Marketing Performance Dashboard. Your role is to help users understand and analyze their weekly business metrics.
 
 DASHBOARD CONTEXT:
 The Weekly Marketing Performance Dashboard tracks these key metrics week over week (Monday-Sunday, Pacific Time):
 
-BOOKINGS:
-- Bookings Created: Number of new bookings created during the week
-- Bookings Due: Number of bookings scheduled to be completed during the week
-- Bookings Completed: Number of bookings marked as done during the week
-- Avg Per Day: Average number of completed bookings per day
-- Conversion (Done/Due): Percentage of due bookings that were completed
-
-REVENUE:
-- Avg Booking Price: Average price per completed booking
-- Total Revenue: Sum of booking revenue + subscription fees + customer fees + tips + credit pack purchases - refunds - Stripe fees
-- Gross Profit: Booking margin + subscription fees + customer fees + tip profit - refunds
-- Margin %: Gross profit as a percentage of total revenue
-
-USERS:
-- Sign Ups: Number of new user registrations
-- New Users (w/ Booking): Users who signed up AND made at least one booking ever
-- New User Conversion: Percentage of signups that have made a booking
-
-MEMBERSHIP:
-- Subscription Revenue: Revenue from active subscriptions
-- Subscription Fees: Fees collected from subscription plans
-- Member Bookings: Bookings made by users with active subscriptions
-- % Revenue from Members: Subscription revenue as percentage of total revenue
-- New Memberships: Number of new subscription signups
+METRIC DEFINITIONS AND FORMULAS:
+${metricSpecsList}
 
 CURRENT DATA:
 ${metricsContext}
+
+${selectedWeek ? `SELECTED WEEK: ${selectedWeek.weekLabel} (${selectedWeek.weekStart} to ${selectedWeek.weekEnd})` : ''}
+
+${canDrillDown ? `DRILL-DOWN CAPABILITY:
+You have access to tools to fetch the actual database rows that make up each metric.
+When users ask "what went into this number", "show me the details", "export the data", or want to see the underlying rows, use the get_metric_rows tool.
+When users ask "how is this calculated", use the get_metric_details tool for the exact formula.
+For revenue metrics with multiple sources (totalRevenue, totalProfit), you can drill down into specific sources like bookingRevenue, subscriptionFees, tips, refunds, etc.` : 'Note: Drill-down to underlying data rows is not available for this user role.'}
 
 INSTRUCTIONS:
 1. Answer questions about the metrics, trends, and performance
@@ -3834,21 +3831,191 @@ INSTRUCTIONS:
 3. Compare weeks when relevant data is available
 4. Explain variances and what might be driving changes
 5. Be concise but informative
-6. If asked about data not shown on the dashboard, explain that you can only analyze the displayed metrics
-7. Format numbers appropriately (currency with $, percentages with %, etc.)
-8. When discussing variance, positive changes are generally good for revenue/bookings/users metrics`;
+6. Format numbers appropriately (currency with $, percentages with %, etc.)
+7. When discussing variance, positive changes are generally good for revenue/bookings/users metrics
+${canDrillDown ? '8. When users want to see underlying data, use the tools to fetch and display it' : ''}`;
 
-      const response = await client.chat.completions.create({
+      // Define tools for function calling (only if user can drill down)
+      const tools = canDrillDown ? [
+        {
+          type: "function" as const,
+          function: {
+            name: "get_metric_details",
+            description: "Get the exact calculation formula and description for a specific metric",
+            parameters: {
+              type: "object",
+              properties: {
+                metricId: {
+                  type: "string",
+                  description: "The metric ID (e.g., totalRevenue, bookingsCompleted, signups)",
+                  enum: Object.keys(METRIC_SPECS),
+                },
+              },
+              required: ["metricId"],
+            },
+          },
+        },
+        {
+          type: "function" as const,
+          function: {
+            name: "get_metric_rows",
+            description: "Fetch the actual database rows that contribute to a metric for a specific week. Returns up to 50 rows as a preview with a CSV download option for full data.",
+            parameters: {
+              type: "object",
+              properties: {
+                metricId: {
+                  type: "string",
+                  description: "The metric ID (e.g., totalRevenue, bookingsCompleted)",
+                  enum: Object.keys(METRIC_SPECS),
+                },
+                subSourceId: {
+                  type: "string",
+                  description: "For metrics with multiple sources (like totalRevenue), optionally specify a sub-source (e.g., bookingRevenue, subscriptionFees, tips, refunds, creditPacks, stripeFees)",
+                },
+                weekStart: {
+                  type: "string",
+                  description: "ISO date string for the start of the week (UTC)",
+                },
+                weekEnd: {
+                  type: "string",
+                  description: "ISO date string for the end of the week (UTC)",
+                },
+              },
+              required: ["metricId", "weekStart", "weekEnd"],
+            },
+          },
+        },
+      ] : undefined;
+
+      // Initial AI call
+      const messages: any[] = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message }
+      ];
+      
+      let response = await client.chat.completions.create({
         model: AI_CONFIG.reportChat.model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: message }
-        ],
+        messages,
+        tools,
         temperature: 0.7,
-        max_tokens: 1000,
+        max_tokens: 2000,
       });
       
-      const assistantMessage = response.choices[0]?.message?.content || "I apologize, but I couldn't generate a response. Please try again.";
+      let assistantMessage = response.choices[0]?.message;
+      
+      // Handle tool calls if any
+      const toolResults: any[] = [];
+      
+      while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
+        messages.push(assistantMessage);
+        
+        for (const toolCall of assistantMessage.tool_calls) {
+          const tc = toolCall as any;
+          const args = JSON.parse(tc.function.arguments);
+          let result: any;
+          
+          if (tc.function.name === "get_metric_details") {
+            const spec = METRIC_SPECS[args.metricId];
+            if (spec) {
+              result = {
+                name: spec.name,
+                category: spec.category,
+                formula: spec.formula,
+                description: spec.description,
+                sourceTables: spec.sourceTables || [spec.sourceTable],
+                subSources: spec.subSources?.map(s => ({ id: s.id, name: s.name })),
+              };
+            } else {
+              result = { error: "Metric not found" };
+            }
+          } else if (tc.function.name === "get_metric_rows") {
+            const pool = getPool(database);
+            const spec = METRIC_SPECS[args.metricId];
+            
+            if (!spec) {
+              result = { error: "Metric not found" };
+            } else {
+              let queryConfig;
+              
+              // Check if requesting a sub-source
+              if (args.subSourceId && spec.subSources) {
+                const subSource = spec.subSources.find(s => s.id === args.subSourceId);
+                if (subSource) {
+                  queryConfig = subSource.getDrilldownQuery(args.weekStart, args.weekEnd);
+                }
+              }
+              
+              // Fall back to main query
+              if (!queryConfig) {
+                queryConfig = spec.getDrilldownQuery(args.weekStart, args.weekEnd);
+              }
+              
+              try {
+                const queryResult = await pool.query(
+                  queryConfig.sql + " LIMIT 50",
+                  queryConfig.params
+                );
+                
+                // Get total count
+                const countSql = `SELECT COUNT(*) as total FROM (${queryConfig.sql}) as subq`;
+                const countResult = await pool.query(countSql, queryConfig.params);
+                const totalCount = parseInt(countResult.rows[0]?.total || "0");
+                
+                result = {
+                  metricName: spec.name,
+                  subSource: args.subSourceId,
+                  columns: queryConfig.columns,
+                  rows: queryResult.rows,
+                  totalCount,
+                  previewCount: queryResult.rows.length,
+                  hasMore: totalCount > 50,
+                  csvExportAvailable: totalCount > 0,
+                };
+                
+                // Store for CSV export
+                toolResults.push({
+                  metricId: args.metricId,
+                  subSourceId: args.subSourceId,
+                  weekStart: args.weekStart,
+                  weekEnd: args.weekEnd,
+                  ...result,
+                });
+                
+                await logAudit({
+                  userId,
+                  userEmail: user.email,
+                  action: "WEEKLY_PERFORMANCE_DRILLDOWN",
+                  database,
+                  details: `Metric: ${spec.name}${args.subSourceId ? ` (${args.subSourceId})` : ""}, ${totalCount} rows`,
+                  ip: req.ip || undefined,
+                });
+              } catch (queryErr) {
+                console.error("Drilldown query error:", queryErr);
+                result = { error: "Failed to fetch data" };
+              }
+            }
+          }
+          
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(result),
+          });
+        }
+        
+        // Continue conversation with tool results
+        response = await client.chat.completions.create({
+          model: AI_CONFIG.reportChat.model,
+          messages,
+          tools,
+          temperature: 0.7,
+          max_tokens: 2000,
+        });
+        
+        assistantMessage = response.choices[0]?.message;
+      }
+      
+      const finalMessage = assistantMessage?.content || "I apologize, but I couldn't generate a response. Please try again.";
       
       await logAudit({
         userId,
@@ -3859,10 +4026,94 @@ INSTRUCTIONS:
         ip: req.ip || undefined,
       });
       
-      res.json({ message: assistantMessage });
+      res.json({ 
+        message: finalMessage,
+        drilldownData: toolResults.length > 0 ? toolResults : undefined,
+      });
     } catch (err) {
       console.error("Error in weekly performance AI chat:", err);
       res.status(500).json({ error: "Failed to process AI request" });
+    }
+  });
+  
+  // CSV Export for drilldown data
+  app.get("/api/weekly-performance/:database/drilldown-export", isAuthenticated, exportLimiter, async (req, res) => {
+    try {
+      const { database } = req.params;
+      const { metricId, subSourceId, weekStart, weekEnd } = req.query;
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      
+      if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      
+      // Check role - only Admin and WashOS users can export
+      if (user.role !== "admin" && user.role !== "washos_user") {
+        return res.status(403).json({ error: "Export not available for your role" });
+      }
+      
+      if (!metricId || !weekStart || !weekEnd) {
+        return res.status(400).json({ error: "Missing required parameters" });
+      }
+      
+      const { METRIC_SPECS } = await import("./weeklyMetrics");
+      const spec = METRIC_SPECS[metricId as string];
+      
+      if (!spec) {
+        return res.status(400).json({ error: "Invalid metric" });
+      }
+      
+      let queryConfig;
+      if (subSourceId && spec.subSources) {
+        const subSource = spec.subSources.find(s => s.id === subSourceId);
+        if (subSource) {
+          queryConfig = subSource.getDrilldownQuery(weekStart as string, weekEnd as string);
+        }
+      }
+      if (!queryConfig) {
+        queryConfig = spec.getDrilldownQuery(weekStart as string, weekEnd as string);
+      }
+      
+      const pool = getPool(database);
+      
+      // Limit to 10,000 rows for safety
+      const result = await pool.query(
+        queryConfig.sql + " LIMIT 10000",
+        queryConfig.params
+      );
+      
+      // Build CSV
+      const headers = queryConfig.columns.join(",");
+      const rows = result.rows.map((row: Record<string, unknown>) => 
+        queryConfig.columns.map((col: string) => {
+          const val = row[col];
+          if (val === null || val === undefined) return "";
+          const strVal = String(val);
+          if (strVal.includes(",") || strVal.includes('"') || strVal.includes("\n")) {
+            return `"${strVal.replace(/"/g, '""')}"`;
+          }
+          return strVal;
+        }).join(",")
+      );
+      
+      const csv = [headers, ...rows].join("\n");
+      
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "WEEKLY_PERFORMANCE_DRILLDOWN_EXPORT",
+        database,
+        details: `Metric: ${spec.name}${subSourceId ? ` (${subSourceId})` : ""}, ${result.rows.length} rows exported`,
+        ip: req.ip || undefined,
+      });
+      
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="${spec.id}_${subSourceId || 'all'}_drilldown.csv"`);
+      res.send(csv);
+    } catch (err) {
+      console.error("Error exporting drilldown data:", err);
+      res.status(500).json({ error: "Failed to export data" });
     }
   });
 

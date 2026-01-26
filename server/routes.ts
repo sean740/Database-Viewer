@@ -3545,6 +3545,7 @@ Always be helpful and explain your suggestions in simple terms.`;
           
           // 13b. Subscription Fees (paid subscription_invoices updated in week, with price based on price_plan_id)
           // Use DISTINCT ON to avoid double-counting when same subscription has multiple invoices
+          // Exclude subscriptions with status='trialing' (first month free)
           pool.query(`
             SELECT COALESCE(SUM(fee_amount), 0) as total
             FROM (
@@ -3558,6 +3559,7 @@ Always be helpful and explain your suggestions in simple terms.`;
               INNER JOIN public.subscriptions s ON s.id = si.subscription_id
               WHERE si.updated_at >= $1 AND si.updated_at < $2
                 AND si.status = 'paid'
+                AND s.status != 'trialing'
               ORDER BY si.subscription_id, si.updated_at DESC
             ) unique_subscriptions
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),

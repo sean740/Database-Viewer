@@ -168,7 +168,7 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
         id: "subscriptionFees",
         name: "Subscription Fees",
         getDrilldownQuery: (weekStart, weekEnd) => ({
-          sql: `SELECT DISTINCT ON (si.subscription_id) si.id, si.subscription_id, s.user_id, s.price_plan_id, si.status, si.updated_at,
+          sql: `SELECT DISTINCT ON (si.subscription_id) si.id, si.subscription_id, s.user_id, s.price_plan_id, si.status, s.status as subscription_status, si.updated_at,
                        CASE 
                          WHEN s.price_plan_id = 11 THEN 96.00
                          WHEN s.price_plan_id = 10 THEN 9.99
@@ -178,9 +178,10 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
                 INNER JOIN public.subscriptions s ON s.id = si.subscription_id
                 WHERE si.updated_at >= $1 AND si.updated_at < $2
                   AND si.status = 'paid'
+                  AND s.status != 'trialing'
                 ORDER BY si.subscription_id, si.updated_at DESC`,
           params: [weekStart, weekEnd],
-          columns: ["id", "subscription_id", "user_id", "price_plan_id", "status", "updated_at", "fee_amount"],
+          columns: ["id", "subscription_id", "user_id", "price_plan_id", "status", "subscription_status", "updated_at", "fee_amount"],
         }),
       },
       {
@@ -286,7 +287,7 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
         id: "subscriptionFees",
         name: "Subscription Fees (100% margin)",
         getDrilldownQuery: (weekStart, weekEnd) => ({
-          sql: `SELECT DISTINCT ON (si.subscription_id) si.id, si.subscription_id, s.user_id, s.price_plan_id, si.status, si.updated_at,
+          sql: `SELECT DISTINCT ON (si.subscription_id) si.id, si.subscription_id, s.user_id, s.price_plan_id, si.status, s.status as subscription_status, si.updated_at,
                        CASE 
                          WHEN s.price_plan_id = 11 THEN 96.00
                          WHEN s.price_plan_id = 10 THEN 9.99
@@ -296,9 +297,10 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
                 INNER JOIN public.subscriptions s ON s.id = si.subscription_id
                 WHERE si.updated_at >= $1 AND si.updated_at < $2
                   AND si.status = 'paid'
+                  AND s.status != 'trialing'
                 ORDER BY si.subscription_id, si.updated_at DESC`,
           params: [weekStart, weekEnd],
-          columns: ["id", "subscription_id", "user_id", "price_plan_id", "status", "updated_at", "fee_amount"],
+          columns: ["id", "subscription_id", "user_id", "price_plan_id", "status", "subscription_status", "updated_at", "fee_amount"],
         }),
       },
       {
@@ -441,12 +443,12 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
     id: "subscriptionFees",
     name: "Subscription Fees",
     category: "Membership",
-    formula: "SUM(fee) FROM subscription_invoices WHERE status='paid' AND updated_at IN week (one per subscription_id), fee = $96 if price_plan_id=11, $9.99 if price_plan_id=10",
+    formula: "SUM(fee) FROM subscription_invoices WHERE invoice.status='paid' AND subscription.status!='trialing' AND updated_at IN week (one per subscription_id), fee = $96 if price_plan_id=11, $9.99 if price_plan_id=10",
     sourceTable: "subscription_invoices",
     sourceTables: ["subscription_invoices", "subscriptions"],
-    description: "Sum of subscription fees from paid invoices updated during the week, counting only one invoice per subscription to avoid duplicates. Price plan 11 = $96, plan 10 = $9.99",
+    description: "Sum of subscription fees from paid invoices updated during the week, counting only one invoice per subscription to avoid duplicates. Excludes subscriptions in 'trialing' status (first month free). Price plan 11 = $96, plan 10 = $9.99",
     getDrilldownQuery: (weekStart, weekEnd) => ({
-      sql: `SELECT DISTINCT ON (si.subscription_id) si.id, si.subscription_id, s.user_id, s.price_plan_id, si.status, si.updated_at,
+      sql: `SELECT DISTINCT ON (si.subscription_id) si.id, si.subscription_id, s.user_id, s.price_plan_id, si.status, s.status as subscription_status, si.updated_at,
                    CASE 
                      WHEN s.price_plan_id = 11 THEN 96.00
                      WHEN s.price_plan_id = 10 THEN 9.99
@@ -456,9 +458,10 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
             INNER JOIN public.subscriptions s ON s.id = si.subscription_id
             WHERE si.updated_at >= $1 AND si.updated_at < $2
               AND si.status = 'paid'
+              AND s.status != 'trialing'
             ORDER BY si.subscription_id, si.updated_at DESC`,
       params: [weekStart, weekEnd],
-      columns: ["id", "subscription_id", "user_id", "price_plan_id", "status", "updated_at", "fee_amount"],
+      columns: ["id", "subscription_id", "user_id", "price_plan_id", "status", "subscription_status", "updated_at", "fee_amount"],
     }),
   },
 

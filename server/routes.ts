@@ -3544,18 +3544,22 @@ Always be helpful and explain your suggestions in simple terms.`;
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total_revenue: 0, total_margin: 0 }] })),
           
           // 13b. Subscription Fees (paid subscription_invoices updated in week, with price based on price_plan_id)
+          // Use DISTINCT ON to avoid double-counting when same subscription has multiple invoices
           pool.query(`
-            SELECT COALESCE(SUM(
-              CASE 
-                WHEN s.price_plan_id = 11 THEN 96.00
-                WHEN s.price_plan_id = 10 THEN 9.99
-                ELSE 0
-              END
-            ), 0) as total
-            FROM public.subscription_invoices si
-            INNER JOIN public.subscriptions s ON s.id = si.subscription_id
-            WHERE si.updated_at >= $1 AND si.updated_at < $2
-              AND si.status = 'paid'
+            SELECT COALESCE(SUM(fee_amount), 0) as total
+            FROM (
+              SELECT DISTINCT ON (si.subscription_id)
+                CASE 
+                  WHEN s.price_plan_id = 11 THEN 96.00
+                  WHEN s.price_plan_id = 10 THEN 9.99
+                  ELSE 0
+                END as fee_amount
+              FROM public.subscription_invoices si
+              INNER JOIN public.subscriptions s ON s.id = si.subscription_id
+              WHERE si.updated_at >= $1 AND si.updated_at < $2
+                AND si.status = 'paid'
+              ORDER BY si.subscription_id, si.updated_at DESC
+            ) unique_subscriptions
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
           
           // 14. Member Bookings (unique completed bookings with date_due in week, linked to subscription_usages)

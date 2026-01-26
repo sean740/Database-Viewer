@@ -3546,22 +3546,30 @@ Always be helpful and explain your suggestions in simple terms.`;
           // 13b. Subscription Fees (paid subscription_invoices updated in week, with price based on price_plan_id)
           // Use DISTINCT ON to avoid double-counting when same subscription has multiple invoices
           // Exclude subscriptions with status='trialing' (first month free)
+          // Also includes $59 cancellation fees for subscriptions with valid cancellation_fee_charge_id
           pool.query(`
-            SELECT COALESCE(SUM(fee_amount), 0) as total
-            FROM (
-              SELECT DISTINCT ON (si.subscription_id)
-                CASE 
-                  WHEN s.price_plan_id = 11 THEN 96.00
-                  WHEN s.price_plan_id = 10 THEN 9.99
-                  ELSE 0
-                END as fee_amount
-              FROM public.subscription_invoices si
-              INNER JOIN public.subscriptions s ON s.id = si.subscription_id
-              WHERE si.updated_at >= $1 AND si.updated_at < $2
-                AND si.status = 'paid'
-                AND s.status != 'trialing'
-              ORDER BY si.subscription_id, si.updated_at DESC
-            ) unique_subscriptions
+            SELECT COALESCE(
+              (SELECT SUM(fee_amount) FROM (
+                SELECT DISTINCT ON (si.subscription_id)
+                  CASE 
+                    WHEN s.price_plan_id = 11 THEN 96.00
+                    WHEN s.price_plan_id = 10 THEN 9.99
+                    ELSE 0
+                  END as fee_amount
+                FROM public.subscription_invoices si
+                INNER JOIN public.subscriptions s ON s.id = si.subscription_id
+                WHERE si.updated_at >= $1 AND si.updated_at < $2
+                  AND si.status = 'paid'
+                  AND s.status != 'trialing'
+                ORDER BY si.subscription_id, si.updated_at DESC
+              ) invoice_fees), 0) +
+              COALESCE(
+                (SELECT COUNT(*) * 59.00
+                FROM public.subscriptions
+                WHERE updated_at >= $1 AND updated_at < $2
+                  AND cancellation_fee_charge_id IS NOT NULL 
+                  AND cancellation_fee_charge_id != ''
+              ), 0) as total
           `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
           
           // 14. Member Bookings (unique completed bookings with date_due in week, linked to subscription_usages)

@@ -166,7 +166,7 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
       },
       {
         id: "subscriptionFees",
-        name: "Subscription Fees",
+        name: "Subscription Fees (Invoices)",
         getDrilldownQuery: (weekStart, weekEnd) => ({
           sql: `SELECT DISTINCT ON (si.subscription_id) si.id, si.subscription_id, s.user_id, s.price_plan_id, si.status, s.status as subscription_status, si.updated_at,
                        CASE 
@@ -182,6 +182,20 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
                 ORDER BY si.subscription_id, si.updated_at DESC`,
           params: [weekStart, weekEnd],
           columns: ["id", "subscription_id", "user_id", "price_plan_id", "status", "subscription_status", "updated_at", "fee_amount"],
+        }),
+      },
+      {
+        id: "cancellationFees",
+        name: "Cancellation Fees ($59 each)",
+        getDrilldownQuery: (weekStart, weekEnd) => ({
+          sql: `SELECT id, user_id, status, cancellation_fee_charge_id, updated_at, 59.00 as fee_amount
+                FROM public.subscriptions
+                WHERE updated_at >= $1 AND updated_at < $2
+                  AND cancellation_fee_charge_id IS NOT NULL
+                  AND cancellation_fee_charge_id != ''
+                ORDER BY updated_at DESC`,
+          params: [weekStart, weekEnd],
+          columns: ["id", "user_id", "status", "cancellation_fee_charge_id", "updated_at", "fee_amount"],
         }),
       },
       {
@@ -287,7 +301,7 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
       },
       {
         id: "subscriptionFees",
-        name: "Subscription Fees (100% margin)",
+        name: "Subscription Fees (100% margin, Invoices)",
         getDrilldownQuery: (weekStart, weekEnd) => ({
           sql: `SELECT DISTINCT ON (si.subscription_id) si.id, si.subscription_id, s.user_id, s.price_plan_id, si.status, s.status as subscription_status, si.updated_at,
                        CASE 
@@ -303,6 +317,20 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
                 ORDER BY si.subscription_id, si.updated_at DESC`,
           params: [weekStart, weekEnd],
           columns: ["id", "subscription_id", "user_id", "price_plan_id", "status", "subscription_status", "updated_at", "fee_amount"],
+        }),
+      },
+      {
+        id: "cancellationFees",
+        name: "Cancellation Fees (100% margin, $59 each)",
+        getDrilldownQuery: (weekStart, weekEnd) => ({
+          sql: `SELECT id, user_id, status, cancellation_fee_charge_id, updated_at, 59.00 as fee_amount
+                FROM public.subscriptions
+                WHERE updated_at >= $1 AND updated_at < $2
+                  AND cancellation_fee_charge_id IS NOT NULL
+                  AND cancellation_fee_charge_id != ''
+                ORDER BY updated_at DESC`,
+          params: [weekStart, weekEnd],
+          columns: ["id", "user_id", "status", "cancellation_fee_charge_id", "updated_at", "fee_amount"],
         }),
       },
       {
@@ -447,10 +475,46 @@ export const METRIC_SPECS: Record<string, MetricSpec> = {
     id: "subscriptionFees",
     name: "Subscription Fees",
     category: "Membership",
-    formula: "SUM(fee) FROM subscription_invoices WHERE invoice.status='paid' AND subscription.status!='trialing' AND updated_at IN week (one per subscription_id), fee = $96 if price_plan_id=11, $9.99 if price_plan_id=10",
+    formula: "Invoice Fees (one per subscription: $96 for plan 11, $9.99 for plan 10) + Cancellation Fees ($59 each for subscriptions with cancellation_fee_charge_id)",
     sourceTable: "subscription_invoices",
     sourceTables: ["subscription_invoices", "subscriptions"],
-    description: "Sum of subscription fees from paid invoices updated during the week, counting only one invoice per subscription to avoid duplicates. Excludes subscriptions in 'trialing' status (first month free). Price plan 11 = $96, plan 10 = $9.99",
+    description: "Sum of subscription fees including: (1) Paid invoice fees updated during the week (one per subscription, excludes trialing), (2) Cancellation fees ($59) for subscriptions with valid cancellation_fee_charge_id updated during the week.",
+    subSources: [
+      {
+        id: "invoiceFees",
+        name: "Invoice Fees",
+        getDrilldownQuery: (weekStart, weekEnd) => ({
+          sql: `SELECT DISTINCT ON (si.subscription_id) si.id, si.subscription_id, s.user_id, s.price_plan_id, si.status, s.status as subscription_status, si.updated_at,
+                       CASE 
+                         WHEN s.price_plan_id = 11 THEN 96.00
+                         WHEN s.price_plan_id = 10 THEN 9.99
+                         ELSE 0
+                       END as fee_amount
+                FROM public.subscription_invoices si
+                INNER JOIN public.subscriptions s ON s.id = si.subscription_id
+                WHERE si.updated_at >= $1 AND si.updated_at < $2
+                  AND si.status = 'paid'
+                  AND s.status != 'trialing'
+                ORDER BY si.subscription_id, si.updated_at DESC`,
+          params: [weekStart, weekEnd],
+          columns: ["id", "subscription_id", "user_id", "price_plan_id", "status", "subscription_status", "updated_at", "fee_amount"],
+        }),
+      },
+      {
+        id: "cancellationFees",
+        name: "Cancellation Fees ($59 each)",
+        getDrilldownQuery: (weekStart, weekEnd) => ({
+          sql: `SELECT id, user_id, status, cancellation_fee_charge_id, updated_at, 59.00 as fee_amount
+                FROM public.subscriptions
+                WHERE updated_at >= $1 AND updated_at < $2
+                  AND cancellation_fee_charge_id IS NOT NULL
+                  AND cancellation_fee_charge_id != ''
+                ORDER BY updated_at DESC`,
+          params: [weekStart, weekEnd],
+          columns: ["id", "user_id", "status", "cancellation_fee_charge_id", "updated_at", "fee_amount"],
+        }),
+      },
+    ],
     getDrilldownQuery: (weekStart, weekEnd) => ({
       sql: `SELECT DISTINCT ON (si.subscription_id) si.id, si.subscription_id, s.user_id, s.price_plan_id, si.status, s.status as subscription_status, si.updated_at,
                    CASE 

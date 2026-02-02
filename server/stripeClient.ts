@@ -101,6 +101,7 @@ export async function getStripeMetricsForWeek(
         lt: endTimestamp,
       },
       limit: 100,
+      expand: ['data.source'],
       ...(startingAfter ? { starting_after: startingAfter } : {}),
     });
     
@@ -119,9 +120,21 @@ export async function getStripeMetricsForWeek(
       } else if (txn.type === 'stripe_fee' || txn.type === 'adjustment') {
         netVolume += txn.net;
       } else if (txn.type === 'transfer') {
-        // Transfers to connected accounts (vendors) have negative amounts
-        // Adding them to netVolume subtracts the vendor payouts from our balance
-        netVolume += txn.net;
+        // Only subtract transfers to connected accounts (vendor payouts)
+        // Transfers to external bank accounts (payouts) should be included in Net Volume
+        const source = txn.source as any;
+        const isConnectedAccountTransfer = source && 
+          typeof source === 'object' && 
+          source.object === 'transfer' && 
+          source.destination;
+        
+        if (isConnectedAccountTransfer) {
+          // This is a transfer to a connected account (vendor payout) - exclude from Net Volume
+          netVolume += txn.net;
+          console.log(`[STRIPE DEBUG] Excluded connected account transfer: ${txn.id}, amount: ${txn.amount / 100}, destination: ${source.destination}`);
+        }
+        // Bank payouts are not transfers to connected accounts, so we don't adjust netVolume for them
+        // The platform balance already reflects money available for payout
       }
     }
 

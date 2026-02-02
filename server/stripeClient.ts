@@ -86,6 +86,10 @@ export async function getStripeMetricsForWeek(
   let transactionCount = 0;
   let refundCount = 0;
   let disputeCount = 0;
+  
+  // Track totals for debugging
+  let totalBalanceChange = 0;  // Sum of ALL txn.net (actual balance change)
+  let totalPayouts = 0;        // Sum of payout amounts (negative values)
 
   // Debug: Log the date range being queried
   console.log(`[STRIPE DEBUG] Querying balance transactions from ${new Date(startTimestamp * 1000).toISOString()} to ${new Date(endTimestamp * 1000).toISOString()}`);
@@ -109,28 +113,21 @@ export async function getStripeMetricsForWeek(
     console.log(`[STRIPE DEBUG] Fetched ${balanceTransactions.data.length} transactions (total: ${totalFetched}), has_more: ${balanceTransactions.has_more}`);
 
     for (const txn of balanceTransactions.data) {
+      // Track total balance change for all transactions
+      totalBalanceChange += txn.net;
+      
       if (txn.type === 'charge' || txn.type === 'payment') {
         grossVolume += txn.amount;
-        netVolume += txn.net;
         transactionCount++;
       } else if (txn.type === 'refund') {
         refunds += Math.abs(txn.amount);
         refundCount++;
-        netVolume += txn.net;
-      } else if (txn.type === 'stripe_fee' || txn.type === 'adjustment') {
-        netVolume += txn.net;
-      } else if (txn.type === 'application_fee') {
-        // Application fees are the platform's cut from Connect charges
-        // These should be added to net volume
-        netVolume += txn.net;
-        console.log(`[STRIPE DEBUG] Added application fee: ${txn.id}, net: ${txn.net / 100}`);
-      } else if (txn.type === 'application_fee_refund') {
-        // Application fee refunds reduce net volume
-        netVolume += txn.net;
-        console.log(`[STRIPE DEBUG] Subtracted application fee refund: ${txn.id}, net: ${txn.net / 100}`);
+      } else if (txn.type === 'payout') {
+        // Track payouts separately - they are balance outflows but not "expenses"
+        totalPayouts += txn.net;  // txn.net is negative for payouts
+        console.log(`[STRIPE DEBUG] Payout to bank: ${txn.id}, net: ${txn.net / 100}`);
       } else if (txn.type === 'transfer') {
-        // Only subtract transfers to connected accounts (vendor payouts)
-        // Transfers to external bank accounts (payouts) should NOT be subtracted
+        // Check if this is a transfer to a connected account (vendor payout)
         const source = txn.source as any;
         const isConnectedAccountTransfer = source && 
           typeof source === 'object' && 
@@ -140,33 +137,15 @@ export async function getStripeMetricsForWeek(
           source.destination.startsWith('acct_');
         
         if (isConnectedAccountTransfer) {
-          // This is a transfer to a connected account (vendor payout) - subtract from Net Volume
-          netVolume += txn.net;
-          console.log(`[STRIPE DEBUG] Excluded connected account transfer: ${txn.id}, amount: ${txn.amount / 100}, destination: ${source.destination}`);
+          console.log(`[STRIPE DEBUG] Connected account transfer: ${txn.id}, net: ${txn.net / 100}, destination: ${source.destination}`);
         } else {
-          // This is NOT a connected account transfer (e.g., internal or other type)
-          // Log it for debugging - don't modify netVolume
-          console.log(`[STRIPE DEBUG] Non-connected transfer (NOT modifying Net Volume): ${txn.id}, type: ${source?.object}, amount: ${txn.amount / 100}, net: ${txn.net / 100}, destination: ${source?.destination || 'none'}`);
+          console.log(`[STRIPE DEBUG] Non-connected transfer: ${txn.id}, net: ${txn.net / 100}, destination: ${source?.destination || 'none'}`);
         }
-      } else if (txn.type === 'payout') {
-        // Payouts to external bank accounts should NOT affect Net Volume
-        // Net Volume represents money earned, not what's currently in Stripe balance
-        // We explicitly ignore payouts - they're just moving money you already earned
-        console.log(`[STRIPE DEBUG] Ignoring payout to bank: ${txn.id}, amount: ${txn.amount / 100}`);
-      } else if (txn.type === 'payment_failure_refund' || txn.type === 'contribution' || 
-                 txn.type === 'reserve_transaction' || txn.type === 'reserved_funds' ||
-                 txn.type === 'connect_collection_transfer' || txn.type === 'issuing_authorization_hold' ||
-                 txn.type === 'issuing_authorization_release' || txn.type === 'issuing_transaction') {
-        // These affect net volume
-        netVolume += txn.net;
-        console.log(`[STRIPE DEBUG] Added ${txn.type}: ${txn.id}, net: ${txn.net / 100}`);
-      } else if (txn.type === 'payout_cancel' || txn.type === 'payout_failure') {
-        // Payout cancellations/failures add money back (ignore for net volume calculation)
-        console.log(`[STRIPE DEBUG] Ignoring ${txn.type}: ${txn.id}, amount: ${txn.amount / 100}`);
-      } else {
-        // Log any unhandled transaction types for debugging
-        console.log(`[STRIPE DEBUG] Unhandled transaction type: ${txn.type}, id: ${txn.id}, amount: ${txn.amount / 100}, net: ${txn.net / 100}`);
+      } else if (txn.type === 'application_fee') {
+        console.log(`[STRIPE DEBUG] Application fee: ${txn.id}, net: ${txn.net / 100}`);
       }
+      // All other transaction types (stripe_fee, adjustment, application_fee, etc.)
+      // are already included in totalBalanceChange via txn.net
     }
 
     hasMore = balanceTransactions.has_more;
@@ -174,6 +153,12 @@ export async function getStripeMetricsForWeek(
       startingAfter = balanceTransactions.data[balanceTransactions.data.length - 1].id;
     }
   }
+  
+  // Net Volume = Total balance change + payouts (add back payouts since they're just withdrawals)
+  // This gives us "money earned" rather than "balance change after payouts"
+  netVolume = totalBalanceChange - totalPayouts;  // Subtract negative to add
+  
+  console.log(`[STRIPE DEBUG] Total balance change: ${totalBalanceChange / 100}, Total payouts: ${totalPayouts / 100}, Net Volume: ${netVolume / 100}`);
 
   let disputeHasMore = true;
   let disputeStartingAfter: string | undefined;

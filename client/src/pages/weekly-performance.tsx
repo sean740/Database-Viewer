@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, DollarSign, Users, BarChart3, Percent, MessageCircle, Send, X, Bot, User, Download, Table2 } from "lucide-react";
+import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, DollarSign, Users, BarChart3, Percent, MessageCircle, Send, X, Bot, User, Download, Table2, MapPin, Check, ChevronDown } from "lucide-react";
 import { Header } from "@/components/header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,6 +24,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
 import type { DatabaseConnection } from "@/lib/types";
@@ -79,6 +84,7 @@ interface WeekData {
 interface WeeklyPerformanceResponse {
   weeks: WeekData[];
   generatedAt: string;
+  selectedZones?: string[] | null;
 }
 
 const metricConfig: {
@@ -170,6 +176,8 @@ function CategoryIcon({ category }: { category: string }) {
 export default function WeeklyPerformance() {
   const [selectedDatabase, setSelectedDatabase] = useState<string>("");
   const [selectedWeekIndex, setSelectedWeekIndex] = useState<number>(0);
+  const [selectedZones, setSelectedZones] = useState<string[]>([]);
+  const [zonesPopoverOpen, setZonesPopoverOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -180,6 +188,23 @@ export default function WeeklyPerformance() {
     queryKey: ["/api/databases"],
   });
   
+  // Fetch available zones for the selected database
+  const { data: zonesData } = useQuery<string[]>({
+    queryKey: ["/api/zones", selectedDatabase],
+    queryFn: async () => {
+      const response = await fetch(`/api/zones/${selectedDatabase}`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error("Failed to fetch zones");
+      }
+      return response.json();
+    },
+    enabled: !!selectedDatabase,
+  });
+  
+  const availableZones = zonesData || [];
+  
   // Auto-select first database using useEffect to avoid state updates during render
   useEffect(() => {
     if (databases.length > 0 && !selectedDatabase) {
@@ -187,10 +212,14 @@ export default function WeeklyPerformance() {
     }
   }, [databases, selectedDatabase]);
   
-  // Reset selected week when database changes
+  // Reset selected week and zones when database changes
   useEffect(() => {
     setSelectedWeekIndex(0);
+    setSelectedZones([]);
   }, [selectedDatabase]);
+  
+  // Build query string for zones filter
+  const zonesQueryParam = selectedZones.length > 0 ? `?zones=${selectedZones.join(",")}` : "";
   
   const { 
     data: performanceData, 
@@ -198,9 +227,35 @@ export default function WeeklyPerformance() {
     refetch,
     isRefetching 
   } = useQuery<WeeklyPerformanceResponse>({
-    queryKey: ["/api/weekly-performance", selectedDatabase],
+    queryKey: ["/api/weekly-performance", selectedDatabase, selectedZones.join(",")],
+    queryFn: async () => {
+      const response = await fetch(`/api/weekly-performance/${selectedDatabase}${zonesQueryParam}`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error("Failed to fetch weekly performance data");
+      }
+      return response.json();
+    },
     enabled: !!selectedDatabase,
   });
+  
+  // Zone selection handlers
+  const toggleZone = (zone: string) => {
+    setSelectedZones((prev) =>
+      prev.includes(zone)
+        ? prev.filter((z) => z !== zone)
+        : [...prev, zone]
+    );
+  };
+  
+  const clearZones = () => {
+    setSelectedZones([]);
+  };
+  
+  const selectAllZones = () => {
+    setSelectedZones([...availableZones]);
+  };
   
   const isLoading = databasesLoading || dataLoading;
   const weeks = performanceData?.weeks || [];
@@ -312,17 +367,94 @@ export default function WeeklyPerformance() {
                 </p>
               </div>
             </div>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={() => refetch()}
-              disabled={isRefetching}
-              className="gap-2"
-              data-testid="button-refresh"
-            >
-              <RefreshCw className={cn("h-4 w-4", isRefetching && "animate-spin")} />
-              Refresh
-            </Button>
+            <div className="flex items-center gap-2">
+              {/* Zone Filter */}
+              {availableZones.length > 0 && (
+                <Popover open={zonesPopoverOpen} onOpenChange={setZonesPopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      data-testid="button-zone-filter"
+                    >
+                      <MapPin className="h-4 w-4" />
+                      {selectedZones.length === 0 
+                        ? "All Zones" 
+                        : selectedZones.length === availableZones.length
+                        ? "All Zones"
+                        : `${selectedZones.length} Zone${selectedZones.length === 1 ? "" : "s"}`}
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-64 p-2" align="end">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between px-2 pb-2 border-b">
+                        <span className="text-sm font-medium">Filter by Zone</span>
+                        <div className="flex gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={selectAllZones}
+                            data-testid="button-select-all-zones"
+                          >
+                            All
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={clearZones}
+                            data-testid="button-clear-zones"
+                          >
+                            Clear
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="max-h-[280px] overflow-y-auto space-y-0.5">
+                        {availableZones.map((zone) => (
+                          <button
+                            key={zone}
+                            onClick={() => toggleZone(zone)}
+                            className={cn(
+                              "w-full flex items-center justify-between px-2 py-1.5 rounded text-sm",
+                              "hover-elevate transition-colors",
+                              selectedZones.includes(zone) && "bg-accent"
+                            )}
+                            data-testid={`zone-option-${zone}`}
+                          >
+                            <span>{zone}</span>
+                            {selectedZones.includes(zone) && (
+                              <Check className="h-4 w-4 text-primary" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      {selectedZones.length > 0 && (
+                        <div className="pt-2 border-t">
+                          <p className="text-xs text-muted-foreground px-2">
+                            Note: Zone filter applies to booking-related metrics only
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              )}
+              
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => refetch()}
+                disabled={isRefetching}
+                className="gap-2"
+                data-testid="button-refresh"
+              >
+                <RefreshCw className={cn("h-4 w-4", isRefetching && "animate-spin")} />
+                Refresh
+              </Button>
+            </div>
           </div>
         </div>
         
@@ -343,10 +475,20 @@ export default function WeeklyPerformance() {
             <div className="p-6 space-y-6">
               {selectedWeek && (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-lg font-semibold">
-                      {selectedWeekIndex === 0 ? "Current Week" : "Selected Week"}: {selectedWeek.weekLabel}
-                    </h2>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-lg font-semibold">
+                        {selectedWeekIndex === 0 ? "Current Week" : "Selected Week"}: {selectedWeek.weekLabel}
+                      </h2>
+                      {selectedZones.length > 0 && selectedZones.length < availableZones.length && (
+                        <Badge variant="outline" className="gap-1 text-xs" data-testid="badge-zone-filter">
+                          <MapPin className="h-3 w-3" />
+                          {selectedZones.length === 1 
+                            ? selectedZones[0] 
+                            : `${selectedZones.length} zones`}
+                        </Badge>
+                      )}
+                    </div>
                     {selectedWeek.variance && comparisonWeek && (
                       <p className="text-sm text-muted-foreground">
                         Compared to previous week ({comparisonWeek.weekLabel})

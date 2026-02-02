@@ -3406,7 +3406,7 @@ Always be helpful and explain your suggestions in simple terms.`;
       const selectedZones = zonesParam ? zonesParam.split(',').filter(z => z.trim()) : [];
       
       // Build zone filter subquery for booking-related queries
-      // Join path: bookings.address_id -> addresses.id -> addresses.zip -> areas.zip -> areas.district_id -> districts.id -> districts.abbreviation
+      // Join path: bookings.address_id -> addresses.id -> addresses.district_id -> districts.id -> districts.abbreviation
       const buildZoneFilter = (bookingAlias: string = 'b', paramOffset: number = 2): { clause: string; params: string[] } => {
         if (selectedZones.length === 0) {
           return { clause: '', params: [] };
@@ -3416,8 +3416,7 @@ Always be helpful and explain your suggestions in simple terms.`;
           clause: `
             AND ${bookingAlias}.address_id IN (
               SELECT addr.id FROM public.addresses addr
-              INNER JOIN public.areas ar ON ar.zip = addr.zip
-              INNER JOIN public.districts d ON d.id = ar.district_id
+              INNER JOIN public.districts d ON d.id = addr.district_id
               WHERE d.abbreviation IN (${placeholders})
             )
           `,

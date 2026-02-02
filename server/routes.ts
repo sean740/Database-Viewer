@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import { eq, and, desc, count } from "drizzle-orm";
 import { storage } from "./storage";
 import { db } from "./db";
+import { getStripeMetricsForWeek, checkStripeConnection, type StripeWeeklyMetrics } from "./stripeClient";
 import { setupAuth, registerAuthRoutes, isAuthenticated, authStorage } from "./replit_integrations/auth";
 import { 
   users, 
@@ -4240,6 +4241,56 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
     ];
 
     res.json(templates);
+  });
+
+  // Stripe Metrics API for Weekly Performance Dashboard
+  // Returns Stripe financial metrics (Gross Volume, Net Volume, Refunds, Disputes) for a given week
+  app.get("/api/stripe-metrics", isAuthenticated, async (req, res) => {
+    try {
+      const { weekStart, weekEnd } = req.query;
+      
+      if (!weekStart || !weekEnd) {
+        return res.status(400).json({ error: "weekStart and weekEnd query parameters required" });
+      }
+      
+      // Check if Stripe is connected
+      const stripeConnected = await checkStripeConnection();
+      if (!stripeConnected) {
+        return res.status(503).json({ 
+          error: "Stripe not connected",
+          message: "Please connect your Stripe account to view financial metrics"
+        });
+      }
+      
+      // Parse the week boundaries (these come as ISO strings from the frontend)
+      // Convert to Unix timestamps for Stripe API
+      const startDate = new Date(weekStart as string);
+      const endDate = new Date(weekEnd as string);
+      
+      const startTimestamp = Math.floor(startDate.getTime() / 1000);
+      const endTimestamp = Math.floor(endDate.getTime() / 1000);
+      
+      const metrics = await getStripeMetricsForWeek(startTimestamp, endTimestamp);
+      
+      res.json({
+        weekStart: weekStart,
+        weekEnd: weekEnd,
+        metrics,
+      });
+    } catch (error: any) {
+      console.error("Stripe metrics error:", error);
+      res.status(500).json({ error: "Failed to fetch Stripe metrics", message: error.message });
+    }
+  });
+  
+  // Check Stripe connection status
+  app.get("/api/stripe-status", isAuthenticated, async (req, res) => {
+    try {
+      const connected = await checkStripeConnection();
+      res.json({ connected });
+    } catch (error) {
+      res.json({ connected: false });
+    }
   });
 
   return httpServer;

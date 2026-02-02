@@ -118,6 +118,10 @@ export async function getStripeMetricsForWeek(
         netVolume += txn.net;
       } else if (txn.type === 'stripe_fee' || txn.type === 'adjustment') {
         netVolume += txn.net;
+      } else if (txn.type === 'transfer') {
+        // Transfers to connected accounts (vendors) have negative amounts
+        // Adding them to netVolume subtracts the vendor payouts from our balance
+        netVolume += txn.net;
       }
     }
 

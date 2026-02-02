@@ -153,6 +153,16 @@ export async function getStripeMetricsForWeek(
         // Net Volume represents money earned, not what's currently in Stripe balance
         // We explicitly ignore payouts - they're just moving money you already earned
         console.log(`[STRIPE DEBUG] Ignoring payout to bank: ${txn.id}, amount: ${txn.amount / 100}`);
+      } else if (txn.type === 'payment_failure_refund' || txn.type === 'contribution' || 
+                 txn.type === 'reserve_transaction' || txn.type === 'reserved_funds' ||
+                 txn.type === 'connect_collection_transfer' || txn.type === 'issuing_authorization_hold' ||
+                 txn.type === 'issuing_authorization_release' || txn.type === 'issuing_transaction') {
+        // These affect net volume
+        netVolume += txn.net;
+        console.log(`[STRIPE DEBUG] Added ${txn.type}: ${txn.id}, net: ${txn.net / 100}`);
+      } else if (txn.type === 'payout_cancel' || txn.type === 'payout_failure') {
+        // Payout cancellations/failures add money back (ignore for net volume calculation)
+        console.log(`[STRIPE DEBUG] Ignoring ${txn.type}: ${txn.id}, amount: ${txn.amount / 100}`);
       } else {
         // Log any unhandled transaction types for debugging
         console.log(`[STRIPE DEBUG] Unhandled transaction type: ${txn.type}, id: ${txn.id}, amount: ${txn.amount / 100}, net: ${txn.net / 100}`);

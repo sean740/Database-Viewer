@@ -102,6 +102,12 @@ filters.json       # Admin-configured filter definitions (per table)
 - Data from Dec 29, 2025 onward, current week at top
 - Handles PST/PDT timezone correctly for week boundaries
 - Week boundaries: Monday 00:00:00 PST to next Monday 00:00:00 PST (exclusive)
+- **Zone Filtering**: Multi-select filter to analyze metrics by geographic region
+  - Filter button shows "All Zones", "1 Zone", or "X Zones" based on selection
+  - Applies to booking-related metrics: Bookings Created/Due/Completed, Revenue, Tips, Refunds, Member Bookings
+  - Does NOT apply to user-related metrics: Sign Ups, New Users, Subscriptions
+  - Join path: bookings.address_id → addresses.id → addresses.district_id → districts.id → districts.abbreviation
+  - Available zones: AUS, BA, CHI, DA, DC, FTL, LA, LV, MIA, NOC, NSH, OC, ORL, PBC, PHX, RVC, SAC, SBC, SD, SF, SFV, SGV, SJ, SLA, SOC, TB, WLA
 - **AI Chat Assistant**: Floating chat button in bottom-right corner allows users to ask questions about their dashboard data and get AI-powered insights
   - **Drill-down capability**: When users ask "show me the data" or similar, AI can retrieve the actual database rows that contribute to any metric
   - **Data preview**: Shows first 10 rows inline in chat with full column data

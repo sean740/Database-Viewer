@@ -592,31 +592,31 @@ export default function WeeklyPerformance() {
                     <Card className="mt-4" data-testid="card-stripe-metrics">
                       <CardHeader className="pb-2">
                         <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                          <CreditCard className="h-4 w-4 text-indigo-500" />
+                          <CreditCard className="h-4 w-4 text-primary" />
                           Stripe Financial Metrics
                           {stripeMetricsLoading && <Loader2 className="h-3 w-3 animate-spin" />}
                         </CardTitle>
                       </CardHeader>
                       <CardContent>
                         {stripeMetricsError ? (
-                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <AlertCircle className="h-4 w-4 text-amber-500" />
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="text-stripe-error">
+                            <AlertCircle className="h-4 w-4 text-destructive" />
                             Unable to load Stripe data
                           </div>
                         ) : stripeMetricsLoading ? (
-                          <div className="text-sm text-muted-foreground">Loading Stripe data...</div>
+                          <div className="text-sm text-muted-foreground" data-testid="text-stripe-loading">Loading Stripe data...</div>
                         ) : stripeMetricsData?.metrics ? (
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            <div className="space-y-1">
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4" data-testid="container-stripe-metrics">
+                            <div className="space-y-1" data-testid="metric-gross-volume">
                               <span className="text-xs text-muted-foreground">Gross Volume</span>
-                              <p className="text-lg font-semibold text-green-600">
+                              <p className="text-lg font-semibold text-green-600 dark:text-green-400">
                                 {formatValue(stripeMetricsData.metrics.grossVolume, "currency")}
                               </p>
                               <span className="text-[10px] text-muted-foreground">
                                 {stripeMetricsData.metrics.transactionCount} transactions
                               </span>
                             </div>
-                            <div className="space-y-1">
+                            <div className="space-y-1" data-testid="metric-net-volume">
                               <span className="text-xs text-muted-foreground">Net Volume</span>
                               <p className="text-lg font-semibold">
                                 {formatValue(stripeMetricsData.metrics.netVolume, "currency")}
@@ -625,18 +625,18 @@ export default function WeeklyPerformance() {
                                 After Stripe fees
                               </span>
                             </div>
-                            <div className="space-y-1">
+                            <div className="space-y-1" data-testid="metric-refunds">
                               <span className="text-xs text-muted-foreground">Refunds</span>
-                              <p className="text-lg font-semibold text-red-600">
+                              <p className="text-lg font-semibold text-red-600 dark:text-red-400">
                                 {formatValue(stripeMetricsData.metrics.refunds, "currency")}
                               </p>
                               <span className="text-[10px] text-muted-foreground">
                                 {stripeMetricsData.metrics.refundCount} refunds
                               </span>
                             </div>
-                            <div className="space-y-1">
+                            <div className="space-y-1" data-testid="metric-disputes">
                               <span className="text-xs text-muted-foreground">Disputes</span>
-                              <p className="text-lg font-semibold text-amber-600">
+                              <p className="text-lg font-semibold text-amber-600 dark:text-amber-400">
                                 {formatValue(stripeMetricsData.metrics.disputes, "currency")}
                               </p>
                               <span className="text-[10px] text-muted-foreground">
@@ -645,30 +645,30 @@ export default function WeeklyPerformance() {
                             </div>
                           </div>
                         ) : (
-                          <div className="text-sm text-muted-foreground">No data available</div>
+                          <div className="text-sm text-muted-foreground" data-testid="text-stripe-no-data">No data available</div>
                         )}
                         
                         {/* Revenue Comparison */}
                         {stripeMetricsData?.metrics && selectedWeek && (
-                          <div className="mt-4 pt-4 border-t">
+                          <div className="mt-4 pt-4 border-t" data-testid="container-revenue-comparison">
                             <h4 className="text-xs font-medium text-muted-foreground mb-2">Revenue Comparison</h4>
                             <div className="grid grid-cols-3 gap-4 text-sm">
-                              <div>
+                              <div data-testid="metric-db-revenue">
                                 <span className="text-xs text-muted-foreground">Database Revenue</span>
                                 <p className="font-medium">{formatValue(selectedWeek.metrics.totalRevenue, "currency")}</p>
                               </div>
-                              <div>
+                              <div data-testid="metric-stripe-gross">
                                 <span className="text-xs text-muted-foreground">Stripe Gross</span>
                                 <p className="font-medium">{formatValue(stripeMetricsData.metrics.grossVolume, "currency")}</p>
                               </div>
-                              <div>
+                              <div data-testid="metric-difference">
                                 <span className="text-xs text-muted-foreground">Difference</span>
                                 <p className={cn(
                                   "font-medium",
                                   (stripeMetricsData.metrics.grossVolume - selectedWeek.metrics.totalRevenue) > 0 
-                                    ? "text-green-600" 
+                                    ? "text-green-600 dark:text-green-400" 
                                     : (stripeMetricsData.metrics.grossVolume - selectedWeek.metrics.totalRevenue) < 0 
-                                      ? "text-red-600" 
+                                      ? "text-red-600 dark:text-red-400" 
                                       : ""
                                 )}>
                                   {formatValue(stripeMetricsData.metrics.grossVolume - selectedWeek.metrics.totalRevenue, "currency")}

@@ -119,22 +119,43 @@ export async function getStripeMetricsForWeek(
         netVolume += txn.net;
       } else if (txn.type === 'stripe_fee' || txn.type === 'adjustment') {
         netVolume += txn.net;
+      } else if (txn.type === 'application_fee') {
+        // Application fees are the platform's cut from Connect charges
+        // These should be added to net volume
+        netVolume += txn.net;
+        console.log(`[STRIPE DEBUG] Added application fee: ${txn.id}, net: ${txn.net / 100}`);
+      } else if (txn.type === 'application_fee_refund') {
+        // Application fee refunds reduce net volume
+        netVolume += txn.net;
+        console.log(`[STRIPE DEBUG] Subtracted application fee refund: ${txn.id}, net: ${txn.net / 100}`);
       } else if (txn.type === 'transfer') {
         // Only subtract transfers to connected accounts (vendor payouts)
-        // Transfers to external bank accounts (payouts) should be included in Net Volume
+        // Transfers to external bank accounts (payouts) should NOT be subtracted
         const source = txn.source as any;
         const isConnectedAccountTransfer = source && 
           typeof source === 'object' && 
           source.object === 'transfer' && 
-          source.destination;
+          source.destination &&
+          typeof source.destination === 'string' &&
+          source.destination.startsWith('acct_');
         
         if (isConnectedAccountTransfer) {
-          // This is a transfer to a connected account (vendor payout) - exclude from Net Volume
+          // This is a transfer to a connected account (vendor payout) - subtract from Net Volume
           netVolume += txn.net;
           console.log(`[STRIPE DEBUG] Excluded connected account transfer: ${txn.id}, amount: ${txn.amount / 100}, destination: ${source.destination}`);
+        } else {
+          // This is NOT a connected account transfer (e.g., internal or other type)
+          // Log it for debugging - don't modify netVolume
+          console.log(`[STRIPE DEBUG] Non-connected transfer (NOT modifying Net Volume): ${txn.id}, type: ${source?.object}, amount: ${txn.amount / 100}, net: ${txn.net / 100}, destination: ${source?.destination || 'none'}`);
         }
-        // Bank payouts are not transfers to connected accounts, so we don't adjust netVolume for them
-        // The platform balance already reflects money available for payout
+      } else if (txn.type === 'payout') {
+        // Payouts to external bank accounts should NOT affect Net Volume
+        // Net Volume represents money earned, not what's currently in Stripe balance
+        // We explicitly ignore payouts - they're just moving money you already earned
+        console.log(`[STRIPE DEBUG] Ignoring payout to bank: ${txn.id}, amount: ${txn.amount / 100}`);
+      } else {
+        // Log any unhandled transaction types for debugging
+        console.log(`[STRIPE DEBUG] Unhandled transaction type: ${txn.type}, id: ${txn.id}, amount: ${txn.amount / 100}, net: ${txn.net / 100}`);
       }
     }
 

@@ -90,6 +90,7 @@ export async function getStripeMetricsForWeek(
   // Track totals for debugging
   let totalBalanceChange = 0;  // Sum of ALL txn.net (actual balance change)
   let totalPayouts = 0;        // Sum of payout amounts (negative values)
+  let totalStripeFees = 0;     // Sum of stripe_fee transactions (negative values)
 
   // Debug: Log the date range being queried
   console.log(`[STRIPE DEBUG] Querying balance transactions from ${new Date(startTimestamp * 1000).toISOString()} to ${new Date(endTimestamp * 1000).toISOString()}`);
@@ -143,8 +144,12 @@ export async function getStripeMetricsForWeek(
         }
       } else if (txn.type === 'application_fee') {
         console.log(`[STRIPE DEBUG] Application fee: ${txn.id}, net: ${txn.net / 100}`);
+      } else if (txn.type === 'stripe_fee') {
+        // Track Stripe fees separately - Stripe's "Net from payments" doesn't deduct these
+        totalStripeFees += txn.net;  // txn.net is negative for fees
+        console.log(`[STRIPE DEBUG] Stripe fee: ${txn.id}, net: ${txn.net / 100}`);
       }
-      // All other transaction types (stripe_fee, adjustment, application_fee, etc.)
+      // All other transaction types (adjustment, application_fee, etc.)
       // are already included in totalBalanceChange via txn.net
     }
 
@@ -154,11 +159,12 @@ export async function getStripeMetricsForWeek(
     }
   }
   
-  // Net Volume = Total balance change + payouts (add back payouts since they're just withdrawals)
-  // This gives us "money earned" rather than "balance change after payouts"
-  netVolume = totalBalanceChange - totalPayouts;  // Subtract negative to add
+  // Net Volume = Total balance change + payouts + stripe fees
+  // Add back payouts (they're just withdrawals, not expenses)
+  // Add back Stripe fees (Stripe's "Net from payments" doesn't deduct platform fees)
+  netVolume = totalBalanceChange - totalPayouts - totalStripeFees;  // Subtract negatives to add
   
-  console.log(`[STRIPE DEBUG] Total balance change: ${totalBalanceChange / 100}, Total payouts: ${totalPayouts / 100}, Net Volume: ${netVolume / 100}`);
+  console.log(`[STRIPE DEBUG] Total balance change: ${totalBalanceChange / 100}, Total payouts: ${totalPayouts / 100}, Total Stripe fees: ${totalStripeFees / 100}, Net Volume: ${netVolume / 100}`);
 
   let disputeHasMore = true;
   let disputeStartingAfter: string | undefined;

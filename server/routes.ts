@@ -3368,10 +3368,31 @@ Always be helpful and explain your suggestions in simple terms.`;
     }
   });
 
+  // Get list of zones (district abbreviations) for filtering
+  app.get("/api/zones/:database", isAuthenticated, async (req, res) => {
+    try {
+      const { database } = req.params;
+      const pool = getPool(database);
+      
+      const result = await pool.query(`
+        SELECT DISTINCT abbreviation as zone
+        FROM public.districts
+        WHERE abbreviation IS NOT NULL AND abbreviation != ''
+        ORDER BY abbreviation
+      `);
+      
+      res.json(result.rows.map(r => r.zone));
+    } catch (err) {
+      console.error("Error fetching zones:", err);
+      res.status(500).json({ error: "Failed to fetch zones" });
+    }
+  });
+
   // Weekly Performance Dashboard API
   app.get("/api/weekly-performance/:database", isAuthenticated, async (req, res) => {
     try {
       const { database } = req.params;
+      const zonesParam = req.query.zones as string | undefined;
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       
@@ -3380,6 +3401,29 @@ Always be helpful and explain your suggestions in simple terms.`;
       }
       
       const pool = getPool(database);
+      
+      // Parse zones filter (comma-separated list of zone abbreviations)
+      const selectedZones = zonesParam ? zonesParam.split(',').filter(z => z.trim()) : [];
+      
+      // Build zone filter subquery for booking-related queries
+      // Join path: bookings.address_id -> addresses.id -> addresses.zip -> areas.zip -> areas.district_id -> districts.id -> districts.abbreviation
+      const buildZoneFilter = (bookingAlias: string = 'b', paramOffset: number = 2): { clause: string; params: string[] } => {
+        if (selectedZones.length === 0) {
+          return { clause: '', params: [] };
+        }
+        const placeholders = selectedZones.map((_, i) => `$${paramOffset + i}`).join(', ');
+        return {
+          clause: `
+            AND ${bookingAlias}.address_id IN (
+              SELECT addr.id FROM public.addresses addr
+              INNER JOIN public.areas ar ON ar.zip = addr.zip
+              INNER JOIN public.districts d ON d.id = ar.district_id
+              WHERE d.abbreviation IN (${placeholders})
+            )
+          `,
+          params: selectedZones
+        };
+      };
       
       // Generate week ranges from Dec 29, 2025 to current week (Mon-Sun, PST)
       // Use explicit PST dates to handle DST correctly
@@ -3464,6 +3508,12 @@ Always be helpful and explain your suggestions in simple terms.`;
         const weekStartUTC = week.startUTC;
         const weekEndUTC = week.endUTC;
         
+        // Build zone filter for this iteration
+        const zoneFilter = buildZoneFilter('b', 3); // params start at $3 (after weekStart, weekEnd)
+        const zoneFilterNoAlias = buildZoneFilter('public.bookings', 3);
+        const baseParams = [weekStartUTC, weekEndUTC];
+        const paramsWithZones = [...baseParams, ...zoneFilter.params];
+        
         // Run all queries in parallel for efficiency
         const [
           bookingsCreatedResult,
@@ -3485,49 +3535,55 @@ Always be helpful and explain your suggestions in simple terms.`;
           // 1. Bookings Created (created_at in week)
           pool.query(`
             SELECT COUNT(*) as count 
-            FROM public.bookings 
-            WHERE created_at >= $1 AND created_at < $2
-          `, [weekStartUTC, weekEndUTC]),
+            FROM public.bookings b
+            WHERE b.created_at >= $1 AND b.created_at < $2
+            ${zoneFilter.clause}
+          `, paramsWithZones),
           
           // 2. Bookings Due (date_due in week)
           pool.query(`
             SELECT COUNT(*) as count 
-            FROM public.bookings 
-            WHERE date_due >= $1 AND date_due < $2
-          `, [weekStartUTC, weekEndUTC]),
+            FROM public.bookings b
+            WHERE b.date_due >= $1 AND b.date_due < $2
+            ${zoneFilter.clause}
+          `, paramsWithZones),
           
           // 3. Bookings Completed (date_due in week AND status = 'done')
           pool.query(`
             SELECT COUNT(*) as count 
-            FROM public.bookings 
-            WHERE date_due >= $1 AND date_due < $2 AND status = 'done'
-          `, [weekStartUTC, weekEndUTC]),
+            FROM public.bookings b
+            WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
+            ${zoneFilter.clause}
+          `, paramsWithZones),
           
           // 6, 7, 8: Revenue metrics for completed bookings (including stripe fees)
           pool.query(`
             SELECT 
-              COALESCE(AVG(price), 0) as avg_price,
-              COALESCE(SUM(price), 0) as total_revenue,
-              COALESCE(SUM(margin), 0) as total_profit,
-              COALESCE(SUM(stripe_fee), 0) as total_stripe_fees
-            FROM public.bookings 
-            WHERE date_due >= $1 AND date_due < $2 AND status = 'done'
-          `, [weekStartUTC, weekEndUTC]),
+              COALESCE(AVG(b.price), 0) as avg_price,
+              COALESCE(SUM(b.price), 0) as total_revenue,
+              COALESCE(SUM(b.margin), 0) as total_profit,
+              COALESCE(SUM(b.stripe_fee), 0) as total_stripe_fees
+            FROM public.bookings b
+            WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
+            ${zoneFilter.clause}
+          `, paramsWithZones),
           
-          // 10. Sign Ups (new users created_at in week)
+          // 10. Sign Ups (new users created_at in week) - NOT zone-filtered (users don't have zones)
           pool.query(`
             SELECT COUNT(*) as count 
             FROM public.users 
             WHERE created_at >= $1 AND created_at < $2
-          `, [weekStartUTC, weekEndUTC]),
+          `, baseParams),
           
           // 11. New Users who have any booking (signed up in week AND have at least one booking ever)
+          // Zone filter applies to the booking join
           pool.query(`
             SELECT COUNT(DISTINCT u.id) as count 
             FROM public.users u
             INNER JOIN public.bookings b ON b.user_id = u.id
             WHERE u.created_at >= $1 AND u.created_at < $2
-          `, [weekStartUTC, weekEndUTC]),
+            ${zoneFilter.clause}
+          `, paramsWithZones),
           
           // 13. Subscription Revenue and Margin (price and margin of UNIQUE completed bookings with date_due in week, linked to subscription_usages)
           pool.query(`
@@ -3540,13 +3596,15 @@ Always be helpful and explain your suggestions in simple terms.`;
               INNER JOIN public.subscription_usages su ON su.booking_id = b.id
               WHERE b.date_due >= $1 AND b.date_due < $2
                 AND b.status = 'done'
+                ${zoneFilter.clause}
             ) unique_bookings
-          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total_revenue: 0, total_margin: 0 }] })),
+          `, paramsWithZones).catch(() => ({ rows: [{ total_revenue: 0, total_margin: 0 }] })),
           
           // 13b. Subscription Fees (paid subscription_invoices updated in week, with price based on price_plan_id)
           // Use DISTINCT ON to avoid double-counting when same subscription has multiple invoices
           // Exclude subscriptions with status='trialing' (first month free)
           // Also includes $59 cancellation fees for subscriptions with valid cancellation_fee_charge_id
+          // Note: Subscription fees are NOT zone-filtered (subscriptions don't have zones directly)
           pool.query(`
             SELECT COALESCE(
               (SELECT SUM(fee_amount) FROM (
@@ -3570,7 +3628,7 @@ Always be helpful and explain your suggestions in simple terms.`;
                   AND cancellation_fee_charge_id IS NOT NULL 
                   AND cancellation_fee_charge_id != ''
               ), 0) as total
-          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+          `, baseParams).catch(() => ({ rows: [{ total: 0 }] })),
           
           // 14. Member Bookings (unique completed bookings with date_due in week, linked to subscription_usages)
           pool.query(`
@@ -3579,14 +3637,15 @@ Always be helpful and explain your suggestions in simple terms.`;
             INNER JOIN public.subscription_usages su ON su.booking_id = b.id
             WHERE b.date_due >= $1 AND b.date_due < $2
               AND b.status = 'done'
-          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ count: 0 }] })),
+              ${zoneFilter.clause}
+          `, paramsWithZones).catch(() => ({ rows: [{ count: 0 }] })),
           
-          // 16. New Membership Signups
+          // 16. New Membership Signups - NOT zone-filtered (subscriptions don't have zones)
           pool.query(`
             SELECT COUNT(*) as count
             FROM public.subscriptions
             WHERE created_at >= $1 AND created_at < $2
-          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ count: 0 }] })),
+          `, baseParams).catch(() => ({ rows: [{ count: 0 }] })),
           
           // Revenue from member bookings (for % calculation) - UNIQUE bookings only
           pool.query(`
@@ -3596,29 +3655,32 @@ Always be helpful and explain your suggestions in simple terms.`;
               FROM public.bookings b
               INNER JOIN public.subscription_usages su ON su.booking_id = b.id
               WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
+                ${zoneFilter.clause}
             ) unique_bookings
-          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+          `, paramsWithZones).catch(() => ({ rows: [{ total: 0 }] })),
           
-          // Customer fees charged in the week (exclude waived fees and those without charge_id)
+          // Customer fees charged in the week (exclude waived fees and those without charge_id) - NOT zone-filtered
           pool.query(`
             SELECT COALESCE(SUM(amount), 0) as total
             FROM public.customer_fees
             WHERE created_at >= $1 AND created_at < $2
               AND (waived IS NULL OR waived != true)
               AND charge_id IS NOT NULL AND charge_id != ''
-          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+          `, baseParams).catch(() => ({ rows: [{ total: 0 }] })),
           
           // Tips from booking_tips where tip was created in the week
+          // Zone filter via the linked booking
           pool.query(`
             SELECT 
-              COALESCE(SUM(tip_amount), 0) as tip_revenue,
-              COALESCE(SUM(tip_amount - vendor_amount), 0) as tip_profit
-            FROM public.booking_tips
-            WHERE created_at >= $1 AND created_at < $2
-          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ tip_revenue: 0, tip_profit: 0 }] })),
+              COALESCE(SUM(bt.tip_amount), 0) as tip_revenue,
+              COALESCE(SUM(bt.tip_amount - bt.vendor_amount), 0) as tip_profit
+            FROM public.booking_tips bt
+            ${selectedZones.length > 0 ? 'INNER JOIN public.bookings b ON b.id = bt.booking_id' : ''}
+            WHERE bt.created_at >= $1 AND bt.created_at < $2
+            ${zoneFilter.clause}
+          `, paramsWithZones).catch(() => ({ rows: [{ tip_revenue: 0, tip_profit: 0 }] })),
           
-          // Credit packs purchased in the week (user_credits_transactions with type_id=16, joined with credits_packs)
-          // Use DISTINCT ON to avoid duplicate matches if multiple credits_packs have same get_amount
+          // Credit packs purchased in the week - NOT zone-filtered (credit packs don't have zones)
           pool.query(`
             SELECT COALESCE(SUM(pay_amount), 0) as total
             FROM (
@@ -3628,14 +3690,17 @@ Always be helpful and explain your suggestions in simple terms.`;
               WHERE uct.created_at >= $1 AND uct.created_at < $2
                 AND uct.user_credits_transaction_type_id = 16
             ) unique_transactions
-          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+          `, baseParams).catch(() => ({ rows: [{ total: 0 }] })),
           
           // Refunds from booking_refunds (created_at in week) - subtract from total revenue
+          // Zone filter via the linked booking
           pool.query(`
-            SELECT COALESCE(SUM(total), 0) as total
-            FROM public.booking_refunds
-            WHERE created_at >= $1 AND created_at < $2
-          `, [weekStartUTC, weekEndUTC]).catch(() => ({ rows: [{ total: 0 }] })),
+            SELECT COALESCE(SUM(br.total), 0) as total
+            FROM public.booking_refunds br
+            ${selectedZones.length > 0 ? 'INNER JOIN public.bookings b ON b.id = br.booking_id' : ''}
+            WHERE br.created_at >= $1 AND br.created_at < $2
+            ${zoneFilter.clause}
+          `, paramsWithZones).catch(() => ({ rows: [{ total: 0 }] })),
         ]);
         
         const bookingsCreated = parseInt(bookingsCreatedResult.rows[0]?.count || "0");
@@ -3768,6 +3833,7 @@ Always be helpful and explain your suggestions in simple terms.`;
       res.json({
         weeks: weeklyDataWithVariance,
         generatedAt: new Date().toISOString(),
+        selectedZones: selectedZones.length > 0 ? selectedZones : null,
       });
     } catch (err) {
       console.error("Error fetching weekly performance:", err);

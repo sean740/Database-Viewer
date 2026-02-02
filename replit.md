@@ -30,6 +30,7 @@ client/
 server/
   routes.ts        # All API endpoints
   storage.ts       # Filter definitions storage (reads/writes filters.json)
+  stripeClient.ts  # Stripe API client helper for financial metrics
 shared/
   schema.ts        # Shared TypeScript types and Zod schemas
 filters.json       # Admin-configured filter definitions (per table)
@@ -88,8 +89,22 @@ filters.json       # Admin-configured filter definitions (per table)
 | GET | `/api/nlq/status` | Check if NLQ is enabled |
 | POST | `/api/nlq` | Process natural language query |
 | GET | `/api/weekly-performance/:database` | Get weekly performance metrics dashboard data |
+| GET | `/api/stripe-status` | Check if Stripe is connected |
+| GET | `/api/stripe-metrics` | Get Stripe financial metrics for a week |
 
 ## Features
+
+### Stripe Financial Metrics Integration
+- When Stripe is connected via Replit integration, the Weekly Performance Dashboard displays additional Stripe metrics
+- Shows metrics for the selected week:
+  - **Gross Volume**: Total charges/payments collected via Stripe
+  - **Net Volume**: Amount after Stripe fees
+  - **Refunds**: Total refunds processed (with count)
+  - **Disputes**: Total disputed amount (with count)
+- **Revenue Comparison**: Compares database-calculated revenue vs Stripe gross volume to identify discrepancies
+- Only visible when Stripe is connected; gracefully hidden otherwise
+- Uses read-only API access (balance transactions and disputes)
+- Protected by authentication - only logged-in users can access Stripe data
 
 ### Weekly Marketing Performance Dashboard
 - Accessible at `/weekly-performance` via sidebar button

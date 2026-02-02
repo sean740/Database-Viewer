@@ -75,8 +75,12 @@ export async function getStripeMetricsForWeek(
   let refundCount = 0;
   let disputeCount = 0;
 
+  // Debug: Log the date range being queried
+  console.log(`[STRIPE DEBUG] Querying balance transactions from ${new Date(startTimestamp * 1000).toISOString()} to ${new Date(endTimestamp * 1000).toISOString()}`);
+
   let hasMore = true;
   let startingAfter: string | undefined;
+  let totalFetched = 0;
 
   while (hasMore) {
     const balanceTransactions = await stripe.balanceTransactions.list({
@@ -87,6 +91,9 @@ export async function getStripeMetricsForWeek(
       limit: 100,
       ...(startingAfter ? { starting_after: startingAfter } : {}),
     });
+    
+    totalFetched += balanceTransactions.data.length;
+    console.log(`[STRIPE DEBUG] Fetched ${balanceTransactions.data.length} transactions (total: ${totalFetched}), has_more: ${balanceTransactions.has_more}`);
 
     for (const txn of balanceTransactions.data) {
       if (txn.type === 'charge' || txn.type === 'payment') {

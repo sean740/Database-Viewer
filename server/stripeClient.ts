@@ -3,6 +3,17 @@ import Stripe from 'stripe';
 let connectionSettings: any;
 
 async function getCredentials() {
+  // First, check for a direct STRIPE_SECRET_KEY environment variable
+  // This allows using WashOS's production Stripe account directly
+  if (process.env.STRIPE_SECRET_KEY) {
+    console.log('[STRIPE] Using STRIPE_SECRET_KEY from environment');
+    return {
+      publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || '',
+      secretKey: process.env.STRIPE_SECRET_KEY,
+    };
+  }
+
+  // Fall back to Replit connector if no direct key is provided
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY
     ? 'repl ' + process.env.REPL_IDENTITY
@@ -38,6 +49,7 @@ async function getCredentials() {
     throw new Error(`Stripe ${targetEnvironment} connection not found`);
   }
 
+  console.log('[STRIPE] Using Replit connector');
   return {
     publishableKey: connectionSettings.settings.publishable,
     secretKey: connectionSettings.settings.secret,

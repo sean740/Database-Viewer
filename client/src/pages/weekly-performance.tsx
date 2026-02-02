@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, DollarSign, Users, BarChart3, Percent, MessageCircle, Send, X, Bot, User, Download, Table2, MapPin, Check, ChevronDown } from "lucide-react";
+import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, DollarSign, Users, BarChart3, Percent, MessageCircle, Send, X, Bot, User, Download, Table2, MapPin, Check, ChevronDown, CreditCard, AlertCircle } from "lucide-react";
 import { Header } from "@/components/header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -85,6 +85,22 @@ interface WeeklyPerformanceResponse {
   weeks: WeekData[];
   generatedAt: string;
   selectedZones?: string[] | null;
+}
+
+interface StripeMetrics {
+  grossVolume: number;
+  netVolume: number;
+  refunds: number;
+  disputes: number;
+  transactionCount: number;
+  refundCount: number;
+  disputeCount: number;
+}
+
+interface StripeMetricsResponse {
+  weekStart: string;
+  weekEnd: string;
+  metrics: StripeMetrics;
 }
 
 const metricConfig: {
@@ -260,8 +276,50 @@ export default function WeeklyPerformance() {
   const isLoading = databasesLoading || dataLoading;
   const weeks = performanceData?.weeks || [];
   
-  // Get the selected week and the one after it for comparison
+  // Get the selected week
   const selectedWeek = weeks[selectedWeekIndex];
+  
+  // Fetch Stripe status
+  const { data: stripeStatus } = useQuery<{ connected: boolean }>({
+    queryKey: ["/api/stripe-status"],
+    queryFn: async () => {
+      const response = await fetch("/api/stripe-status", {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        return { connected: false };
+      }
+      return response.json();
+    },
+  });
+  
+  // Fetch Stripe metrics for the selected week
+  const { 
+    data: stripeMetricsData, 
+    isLoading: stripeMetricsLoading,
+    error: stripeMetricsError 
+  } = useQuery<StripeMetricsResponse>({
+    queryKey: ["/api/stripe-metrics", selectedWeek?.weekStart, selectedWeek?.weekEnd],
+    queryFn: async () => {
+      if (!selectedWeek) throw new Error("No week selected");
+      const params = new URLSearchParams({
+        weekStart: selectedWeek.weekStart,
+        weekEnd: selectedWeek.weekEnd,
+      });
+      const response = await fetch(`/api/stripe-metrics?${params}`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || "Failed to fetch Stripe metrics");
+      }
+      return response.json();
+    },
+    enabled: !!selectedWeek && stripeStatus?.connected === true,
+    retry: false,
+  });
+  
+  // Get the comparison week (one after selected)
   const comparisonWeek = weeks[selectedWeekIndex + 1];
   
   // Group metrics by category
@@ -528,6 +586,100 @@ export default function WeeklyPerformance() {
                       </Card>
                     ))}
                   </div>
+                  
+                  {/* Stripe Financial Metrics Card */}
+                  {stripeStatus?.connected && (
+                    <Card className="mt-4" data-testid="card-stripe-metrics">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                          <CreditCard className="h-4 w-4 text-indigo-500" />
+                          Stripe Financial Metrics
+                          {stripeMetricsLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        {stripeMetricsError ? (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <AlertCircle className="h-4 w-4 text-amber-500" />
+                            Unable to load Stripe data
+                          </div>
+                        ) : stripeMetricsLoading ? (
+                          <div className="text-sm text-muted-foreground">Loading Stripe data...</div>
+                        ) : stripeMetricsData?.metrics ? (
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="space-y-1">
+                              <span className="text-xs text-muted-foreground">Gross Volume</span>
+                              <p className="text-lg font-semibold text-green-600">
+                                {formatValue(stripeMetricsData.metrics.grossVolume, "currency")}
+                              </p>
+                              <span className="text-[10px] text-muted-foreground">
+                                {stripeMetricsData.metrics.transactionCount} transactions
+                              </span>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-xs text-muted-foreground">Net Volume</span>
+                              <p className="text-lg font-semibold">
+                                {formatValue(stripeMetricsData.metrics.netVolume, "currency")}
+                              </p>
+                              <span className="text-[10px] text-muted-foreground">
+                                After Stripe fees
+                              </span>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-xs text-muted-foreground">Refunds</span>
+                              <p className="text-lg font-semibold text-red-600">
+                                {formatValue(stripeMetricsData.metrics.refunds, "currency")}
+                              </p>
+                              <span className="text-[10px] text-muted-foreground">
+                                {stripeMetricsData.metrics.refundCount} refunds
+                              </span>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-xs text-muted-foreground">Disputes</span>
+                              <p className="text-lg font-semibold text-amber-600">
+                                {formatValue(stripeMetricsData.metrics.disputes, "currency")}
+                              </p>
+                              <span className="text-[10px] text-muted-foreground">
+                                {stripeMetricsData.metrics.disputeCount} disputes
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-sm text-muted-foreground">No data available</div>
+                        )}
+                        
+                        {/* Revenue Comparison */}
+                        {stripeMetricsData?.metrics && selectedWeek && (
+                          <div className="mt-4 pt-4 border-t">
+                            <h4 className="text-xs font-medium text-muted-foreground mb-2">Revenue Comparison</h4>
+                            <div className="grid grid-cols-3 gap-4 text-sm">
+                              <div>
+                                <span className="text-xs text-muted-foreground">Database Revenue</span>
+                                <p className="font-medium">{formatValue(selectedWeek.metrics.totalRevenue, "currency")}</p>
+                              </div>
+                              <div>
+                                <span className="text-xs text-muted-foreground">Stripe Gross</span>
+                                <p className="font-medium">{formatValue(stripeMetricsData.metrics.grossVolume, "currency")}</p>
+                              </div>
+                              <div>
+                                <span className="text-xs text-muted-foreground">Difference</span>
+                                <p className={cn(
+                                  "font-medium",
+                                  (stripeMetricsData.metrics.grossVolume - selectedWeek.metrics.totalRevenue) > 0 
+                                    ? "text-green-600" 
+                                    : (stripeMetricsData.metrics.grossVolume - selectedWeek.metrics.totalRevenue) < 0 
+                                      ? "text-red-600" 
+                                      : ""
+                                )}>
+                                  {formatValue(stripeMetricsData.metrics.grossVolume - selectedWeek.metrics.totalRevenue, "currency")}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
                 </div>
               )}
               

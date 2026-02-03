@@ -489,10 +489,10 @@ export async function calculateOperationsMetrics(
          SELECT 1 FROM public.bookings b 
          WHERE b.vendor_id = v.id 
            AND b.status = 'done' 
-           AND b.date_due >= ($2::timestamp - interval '30 days')
-           AND b.date_due < $2
+           AND b.date_due >= ($1::timestamp - interval '30 days')
+           AND b.date_due < $1
        )`,
-    [periodStart, periodEnd]
+    [periodEnd]
   );
   const totalMinutesWorked = parseFloat(utilizationResult.rows[0]?.worked || "0");
   const totalMinutesEffectiveUtil = parseFloat(utilizationResult.rows[0]?.effective || "0");

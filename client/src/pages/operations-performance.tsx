@@ -100,7 +100,7 @@ type MetricConfig = {
 
 const networkManagementMetrics: MetricConfig[] = [
   { key: "bookingsCompleted", label: "Bookings Completed", category: "Network Management", format: "number" },
-  { key: "emergencies", label: "Emergencies", category: "Network Management", format: "number", invertVariance: true },
+  { key: "emergencies", label: "Emergencies %", category: "Network Management", format: "percent", isPercentPoint: true, invertVariance: true },
   { key: "deliveryRate", label: "Delivery Rate", category: "Network Management", format: "percent", isPercentPoint: true },
   { key: "defectPercent", label: "Defect %", category: "Network Management", format: "percent", isPercentPoint: true, invertVariance: true },
   { key: "overbookedPercent", label: "Overbooked %", category: "Network Management", format: "percent", isPercentPoint: true, invertVariance: true },
@@ -121,7 +121,7 @@ function formatValue(value: number, format: "number" | "percent" | "rating" | "h
   if (value === null || value === undefined || isNaN(value)) return "-";
   switch (format) {
     case "percent":
-      return `${value.toFixed(1)}%`;
+      return `${value.toFixed(2)}%`;
     case "rating":
       return value.toFixed(2);
     case "hours":

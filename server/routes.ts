@@ -4906,5 +4906,151 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
     }
   });
 
+  // Zone Comparison endpoint for Operations Dashboard - compare all zones for a specific metric
+  app.get("/api/operations-performance/:database/zone-comparison", isAuthenticated, async (req, res) => {
+    try {
+      const { database } = req.params;
+      const { metricId, periodStart, periodEnd, prevPeriodStart, prevPeriodEnd } = req.query;
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      
+      if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      
+      if (!metricId || !periodStart || !periodEnd) {
+        return res.status(400).json({ error: "Missing required parameters: metricId, periodStart, periodEnd" });
+      }
+      
+      // Validate metricId using the canonical OPERATIONS_METRIC_SPECS source
+      const metricSpec = getOperationsMetricSpec(metricId as string);
+      if (!metricSpec) {
+        return res.status(400).json({ error: `Invalid metricId: ${metricId}. Use a valid operations metric ID.` });
+      }
+      
+      const pool = getPool(database);
+      
+      // Check cache first (1 hour cache for zone comparison data)
+      const cacheKey = `zone-comparison:${database}:${metricId}:${periodStart}:${periodEnd}:${prevPeriodStart || ""}:${prevPeriodEnd || ""}`;
+      const cachedData = getFromCache<any>(cacheKey);
+      if (cachedData) {
+        await logAudit({
+          userId,
+          userEmail: user.email,
+          action: "VIEW_ZONE_COMPARISON",
+          database,
+          details: `Metric: ${metricId}, Period: ${periodStart} to ${periodEnd} (cached)`,
+          ip: req.ip || undefined,
+        });
+        return res.json({ ...cachedData, fromCache: true });
+      }
+      
+      // Get all available zones
+      const zonesResult = await pool.query(
+        `SELECT DISTINCT abbreviation FROM public.districts WHERE abbreviation IS NOT NULL ORDER BY abbreviation`
+      );
+      const allZones = zonesResult.rows.map((r: any) => r.abbreviation);
+      
+      // Calculate metrics for all zones in parallel for better performance
+      const zoneMetricsPromises = allZones.map(async (zone) => {
+        const [currentMetrics, prevMetrics] = await Promise.all([
+          calculateOperationsMetrics(pool, periodStart as string, periodEnd as string, null, [zone]),
+          prevPeriodStart && prevPeriodEnd
+            ? calculateOperationsMetrics(pool, prevPeriodStart as string, prevPeriodEnd as string, null, [zone])
+            : Promise.resolve(null),
+        ]);
+        
+        const metricKey = metricId as keyof typeof currentMetrics;
+        const currentValue = currentMetrics[metricKey];
+        
+        // Skip zones with non-numeric values
+        if (typeof currentValue !== 'number') {
+          return null;
+        }
+        
+        let variance: number | null = null;
+        if (prevMetrics) {
+          const prevValue = prevMetrics[metricKey];
+          if (typeof prevValue === 'number' && prevValue !== 0) {
+            variance = Math.round(((currentValue - prevValue) / prevValue) * 100 * 100) / 100;
+          } else if (typeof prevValue === 'number') {
+            variance = currentValue > 0 ? 100 : 0;
+          }
+        }
+        
+        return {
+          zone,
+          value: currentValue,
+          variance,
+        };
+      });
+      
+      const zoneResults = (await Promise.all(zoneMetricsPromises)).filter(
+        (r): r is { zone: string; value: number; variance: number | null } => r !== null
+      );
+      
+      // Sort by value descending (highest first)
+      zoneResults.sort((a, b) => b.value - a.value);
+      
+      // Also calculate the "All Zones" aggregate
+      const allZonesMetrics = await calculateOperationsMetrics(
+        pool,
+        periodStart as string,
+        periodEnd as string,
+        null,
+        []
+      );
+      const allZonesValue = allZonesMetrics[metricId as keyof typeof allZonesMetrics];
+      
+      let allZonesVariance: number | null = null;
+      if (prevPeriodStart && prevPeriodEnd) {
+        const prevAllZonesMetrics = await calculateOperationsMetrics(
+          pool,
+          prevPeriodStart as string,
+          prevPeriodEnd as string,
+          null,
+          []
+        );
+        const prevAllZonesValue = prevAllZonesMetrics[metricId as keyof typeof prevAllZonesMetrics];
+        
+        if (typeof allZonesValue === 'number' && typeof prevAllZonesValue === 'number') {
+          if (prevAllZonesValue !== 0) {
+            allZonesVariance = Math.round(((allZonesValue - prevAllZonesValue) / prevAllZonesValue) * 100 * 100) / 100;
+          } else {
+            allZonesVariance = allZonesValue > 0 ? 100 : 0;
+          }
+        }
+      }
+      
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "VIEW_ZONE_COMPARISON",
+        database,
+        details: `Metric: ${metricId}, Period: ${periodStart} to ${periodEnd}`,
+        ip: req.ip || undefined,
+      });
+      
+      const responseData = {
+        metricId,
+        periodStart,
+        periodEnd,
+        allZones: {
+          value: typeof allZonesValue === 'number' ? allZonesValue : 0,
+          variance: allZonesVariance,
+        },
+        zones: zoneResults,
+      };
+      
+      // Cache for 1 hour (3600000ms)
+      setInCache(cacheKey, responseData, 3600000);
+      
+      res.json({ ...responseData, fromCache: false });
+    } catch (err) {
+      console.error("Error in zone comparison:", err);
+      res.status(500).json({ error: "Failed to calculate zone comparison" });
+    }
+  });
+
   return httpServer;
 }

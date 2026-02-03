@@ -94,6 +94,7 @@ filters.json       # Admin-configured filter definitions (per table)
 | GET | `/api/operations-performance/:database` | Get operations performance metrics dashboard data |
 | POST | `/api/operations-performance/:database/chat` | AI chat for Operations dashboard |
 | GET | `/api/operations-performance/:database/drilldown-export` | Export operations drilldown data as CSV |
+| GET | `/api/operations-performance/:database/zone-comparison` | Get zone-by-zone comparison for a specific metric |
 | GET | `/api/stripe-status` | Check if Stripe is connected |
 | GET | `/api/stripe-metrics` | Get Stripe financial metrics for a week |
 
@@ -164,6 +165,14 @@ filters.json       # Admin-configured filter definitions (per table)
   - **Data preview**: Shows first 10 rows inline in chat with full column data
   - **CSV export**: Download button exports up to 10,000 rows for deeper analysis
   - **Role restricted**: Drill-down access limited to Admin and WashOS User roles only
+- **Zone Comparison View**: Toggle between "Overview" and "Zone Comparison" views in the header
+  - Allows comparing any single metric across all geographic zones
+  - Metric selector dropdown to choose which metric to compare
+  - Shows "All Zones (Aggregate)" summary with value and variance
+  - Displays table of all zones sorted by value (highest first)
+  - Each zone shows current value and variance vs previous period
+  - Calculates metrics for all zones in parallel for performance
+  - Validates metric IDs to ensure only valid operations metrics can be queried
 
 ### Multi-Column Sorting
 - Click column headers to sort ascending (↑) → descending (↓) → clear

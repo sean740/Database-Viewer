@@ -46,7 +46,7 @@ export function TableSidebar({
         <Link href="/weekly-performance">
           <Button variant="outline" className="w-full gap-2" data-testid="link-weekly-performance">
             <BarChart3 className="h-4 w-4" />
-            Weekly Dashboard
+            Marketing Dashboard
           </Button>
         </Link>
         <Link href="/operations-performance">

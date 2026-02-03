@@ -110,5 +110,47 @@
       }
     ],
     "lastUsedAt": "2026-01-26T21:17:28.798Z"
+  },
+  {
+    "id": "bar5daegxhvgeefdl2ql7",
+    "userId": "084c4fe4-5982-45f3-9505-a29c409c3131",
+    "database": "Default",
+    "table": "public.vendors",
+    "filters": [
+      {
+        "column": "id",
+        "operator": "eq",
+        "value": "7844"
+      }
+    ],
+    "lastUsedAt": "2026-02-03T04:14:41.565Z"
+  },
+  {
+    "id": "p637ruy28u8uzqawygi8fs",
+    "userId": "084c4fe4-5982-45f3-9505-a29c409c3131",
+    "database": "Default",
+    "table": "public.vendor_onboardings",
+    "filters": [
+      {
+        "column": "vendor_id",
+        "operator": "eq",
+        "value": "7844"
+      }
+    ],
+    "lastUsedAt": "2026-02-03T04:16:03.804Z"
+  },
+  {
+    "id": "f9lsrx7qhkb7g2u5tdst5f",
+    "userId": "084c4fe4-5982-45f3-9505-a29c409c3131",
+    "database": "Default",
+    "table": "public.vendor_onboardings",
+    "filters": [
+      {
+        "column": "vendor_id",
+        "operator": "eq",
+        "value": "7840"
+      }
+    ],
+    "lastUsedAt": "2026-02-03T04:16:51.141Z"
   }
 ]

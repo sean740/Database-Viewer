@@ -4396,52 +4396,20 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       // Limit to 52 weeks or 12 months
       const limitedPeriods = periods.slice(0, periodType === "monthly" ? 12 : 52);
       
-      // Check Stripe connection for margin calculation
-      const stripeConnected = await checkStripeConnection();
-      
-      // Calculate metrics for each period
+      // Calculate metrics for each period (no Stripe calls - too slow)
       const results: OperationsPeriodMetrics[] = [];
       
       for (let i = 0; i < limitedPeriods.length; i++) {
         const period = limitedPeriods[i];
         
-        // Get Stripe metrics for this period if connected
-        let stripeMetrics: { grossVolume: number; netVolume: number } | null = null;
-        if (stripeConnected) {
-          try {
-            const startTimestamp = Math.floor(new Date(period.startUTC).getTime() / 1000);
-            const endTimestamp = Math.floor(new Date(period.endUTC).getTime() / 1000);
-            const stripePeriodMetrics = await getStripeMetricsForWeek(startTimestamp, endTimestamp);
-            stripeMetrics = {
-              grossVolume: stripePeriodMetrics.grossVolume,
-              netVolume: stripePeriodMetrics.netVolume,
-            };
-          } catch (e) {
-            console.error("Error fetching Stripe metrics for operations:", e);
-          }
-        }
-        
-        const metrics = await calculateOperationsMetrics(pool, period.startUTC, period.endUTC, stripeMetrics);
+        // Calculate metrics without Stripe data (uses database margin values instead)
+        const metrics = await calculateOperationsMetrics(pool, period.startUTC, period.endUTC, null);
         
         // Get previous period metrics for variance
         let variance: Record<string, number | null> = {};
         if (i < limitedPeriods.length - 1) {
           const prevPeriod = limitedPeriods[i + 1];
-          let prevStripeMetrics: { grossVolume: number; netVolume: number } | null = null;
-          if (stripeConnected) {
-            try {
-              const prevStartTimestamp = Math.floor(new Date(prevPeriod.startUTC).getTime() / 1000);
-              const prevEndTimestamp = Math.floor(new Date(prevPeriod.endUTC).getTime() / 1000);
-              const prevStripePeriodMetrics = await getStripeMetricsForWeek(prevStartTimestamp, prevEndTimestamp);
-              prevStripeMetrics = {
-                grossVolume: prevStripePeriodMetrics.grossVolume,
-                netVolume: prevStripePeriodMetrics.netVolume,
-              };
-            } catch (e) {
-              console.error("Error fetching prev Stripe metrics for operations:", e);
-            }
-          }
-          const prevMetrics = await calculateOperationsMetrics(pool, prevPeriod.startUTC, prevPeriod.endUTC, prevStripeMetrics);
+          const prevMetrics = await calculateOperationsMetrics(pool, prevPeriod.startUTC, prevPeriod.endUTC, null);
           variance = calculateOperationsVariance(metrics, prevMetrics);
         }
         
@@ -4457,7 +4425,7 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       
       res.json({
         periods: results,
-        stripeConnected,
+        stripeConnected: false,
         periodType,
       });
     } catch (error: any) {

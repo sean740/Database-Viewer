@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, Star, Truck, Users, BarChart3, Percent, ChevronDown, AlertTriangle, Clock, UserCheck, UserMinus } from "lucide-react";
@@ -251,6 +251,13 @@ export default function OperationsPerformance() {
   const { data: databases, isLoading: databasesLoading } = useQuery<DatabaseConnection[]>({
     queryKey: ["/api/databases"],
   });
+
+  // Auto-select first database when available
+  useEffect(() => {
+    if (databases && databases.length > 0 && !selectedDatabase) {
+      setSelectedDatabase(databases[0].name);
+    }
+  }, [databases, selectedDatabase]);
 
   const { 
     data: operationsData, 

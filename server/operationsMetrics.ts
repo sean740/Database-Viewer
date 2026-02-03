@@ -86,16 +86,16 @@ export const OPERATIONS_METRIC_SPECS: Record<string, OperationsMetricSpec> = {
     description: "Percentage of defects: vendor-related rescheduling requests plus cancellations with reason codes 4,5,6,7,8,9,17,18",
     format: "percent",
     getDrilldownQuery: (periodStart, periodEnd) => ({
-      sql: `SELECT 'rescheduling' as defect_type, id, booking_id, reason as reason_detail, accepted_at as event_date
-            FROM public.rescheduling_requests 
-            WHERE accepted_at >= $1 AND accepted_at < $2
-              AND reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')
+      sql: `SELECT 'rescheduling' as defect_type, rr.id, rr.booking_id, rr.reason as reason_detail, rr.accepted_at as event_date
+            FROM public.rescheduling_requests rr
+            WHERE rr.accepted_at >= $1 AND rr.accepted_at < $2
+              AND rr.reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')
             UNION ALL
-            SELECT 'cancellation' as defect_type, id, id as booking_id, cancel_reason_id::text as reason_detail, date_due as event_date
-            FROM public.bookings 
-            WHERE date_due >= $1 AND date_due < $2
-              AND status = 'cancelled'
-              AND cancel_reason_id IN (4,5,6,7,8,9,17,18)
+            SELECT 'cancellation' as defect_type, cb.id, cb.booking_id, cb.cancel_reason_id::text as reason_detail, b.date_due as event_date
+            FROM public.cancelled_bookings cb
+            INNER JOIN public.bookings b ON b.id = cb.booking_id
+            WHERE b.date_due >= $1 AND b.date_due < $2
+              AND cb.cancel_reason_id IN (4,5,6,7,8,9,17,18)
             ORDER BY event_date DESC`,
       params: [periodStart, periodEnd],
       columns: ["defect_type", "id", "booking_id", "reason_detail", "event_date"],
@@ -403,10 +403,10 @@ export async function calculateOperationsMetrics(
   
   // Cancellations with reason codes 4,5,6,7,8,9,17,18
   const cancellationDefectsResult = await pool.query(
-    `SELECT COUNT(*) as count FROM public.bookings 
-     WHERE date_due >= $1 AND date_due < $2
-       AND status = 'cancelled'
-       AND cancel_reason_id IN (4,5,6,7,8,9,17,18)`,
+    `SELECT COUNT(*) as count FROM public.cancelled_bookings cb
+     INNER JOIN public.bookings b ON b.id = cb.booking_id
+     WHERE b.date_due >= $1 AND b.date_due < $2
+       AND cb.cancel_reason_id IN (4,5,6,7,8,9,17,18)`,
     [periodStart, periodEnd]
   );
   const cancellationDefects = parseInt(cancellationDefectsResult.rows[0]?.count || "0");

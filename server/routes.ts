@@ -4621,9 +4621,14 @@ ${JSON.stringify(dashboardData.periods[1]?.metrics || {}, null, 2)}` : ''}
         `- ${m.name} (id: ${m.id}): ${m.description}\n  Formula: ${m.formula}\n  Category: ${m.category}`
       ).join("\n\n");
       
+      const periodLabel = periodType === 'monthly' ? 'month' : 'week';
+      const periodsLabel = periodType === 'monthly' ? 'months' : 'weeks';
+      
       const systemPrompt = `You are an AI assistant for the WashOS Operations Performance Dashboard. Your role is to help users understand and analyze their operations metrics.
 
 IMPORTANT: The current year is ${currentYear}. When users mention dates, they mean ${currentYear}, NOT any other year.
+
+CURRENT VIEW MODE: ${periodType.toUpperCase()} - You are currently viewing ${periodsLabel}. Always refer to time periods as "${periodsLabel}" not "${periodType === 'monthly' ? 'weeks' : 'months'}". When users ask about "this period" or "last period", they mean ${periodsLabel}.
 
 DASHBOARD CONTEXT:
 The Operations Performance Dashboard tracks these key metrics for network management and supply management:
@@ -4634,11 +4639,11 @@ ${metricSpecsList}
 CURRENT DATA:
 ${metricsContext}
 
-${selectedPeriod ? `SELECTED ${periodType === 'monthly' ? 'MONTH' : 'WEEK'}: ${selectedPeriod.periodLabel} (${selectedPeriod.periodStart} to ${selectedPeriod.periodEnd})` : ''}
+${selectedPeriod ? `SELECTED ${periodLabel.toUpperCase()}: ${selectedPeriod.periodLabel} (${selectedPeriod.periodStart} to ${selectedPeriod.periodEnd})` : ''}
 
 ${availablePeriodsContext}
 
-CRITICAL: When calling get_metric_rows, you MUST use the EXACT periodStart and periodEnd values from the available periods list above. Look up the period label the user mentions and use its corresponding periodStart and periodEnd values. Do NOT make up date values.
+CRITICAL: When calling get_metric_rows, you MUST use the EXACT periodStart and periodEnd values from the available ${periodsLabel} list above. Look up the ${periodLabel} label the user mentions and use its corresponding periodStart and periodEnd values. Do NOT make up date values.
 
 ${canDrillDown ? `DRILL-DOWN CAPABILITY:
 You have access to tools to fetch the actual database rows that make up each metric.
@@ -4648,13 +4653,14 @@ When users ask "how is this calculated", use the get_metric_details tool for the
 INSTRUCTIONS:
 1. Answer questions about the metrics, trends, and performance
 2. Help users understand what the numbers mean and provide insights
-3. Compare periods when relevant data is available
+3. Compare ${periodsLabel} when relevant data is available
 4. Explain variances and what might be driving changes
 5. Be concise but informative
 6. Format numbers appropriately (percentages with %, counts as whole numbers, ratings to 2 decimal places)
 7. For operations metrics, lower is generally better for: Emergencies, Defect %, Overbooked %, Dismissed Vendors
    Higher is generally better for: Delivery Rate, Rating, Response Rate, Margin, Active Vendors, New Vendors, Utilization
-${canDrillDown ? '8. When users want to see underlying data, use the tools to fetch and display it' : ''}`;
+8. ALWAYS use "${periodsLabel}" terminology when referring to time periods, never use "${periodType === 'monthly' ? 'weeks' : 'months'}"
+${canDrillDown ? '9. When users want to see underlying data, use the tools to fetch and display it' : ''}`;
 
       // Define tools for function calling (only if user can drill down)
       const tools = canDrillDown ? [

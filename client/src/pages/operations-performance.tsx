@@ -100,10 +100,10 @@ type MetricConfig = {
 
 const networkManagementMetrics: MetricConfig[] = [
   { key: "bookingsCompleted", label: "Bookings Completed", category: "Network Management", format: "number" },
-  { key: "emergencies", label: "Emergencies %", category: "Network Management", format: "percent", isPercentPoint: true, invertVariance: true },
+  { key: "emergencies", label: "Emergency Rate", category: "Network Management", format: "percent", isPercentPoint: true, invertVariance: true },
   { key: "deliveryRate", label: "Delivery Rate", category: "Network Management", format: "percent", isPercentPoint: true },
-  { key: "defectPercent", label: "Defect %", category: "Network Management", format: "percent", isPercentPoint: true, invertVariance: true },
-  { key: "overbookedPercent", label: "Overbooked %", category: "Network Management", format: "percent", isPercentPoint: true, invertVariance: true },
+  { key: "defectPercent", label: "Defect Rate", category: "Network Management", format: "percent", isPercentPoint: true, invertVariance: true },
+  { key: "overbookedPercent", label: "Overbooked Rate", category: "Network Management", format: "percent", isPercentPoint: true, invertVariance: true },
   { key: "avgRating", label: "Rating", category: "Network Management", format: "rating" },
   { key: "responseRate", label: "Response Rate", category: "Network Management", format: "percent", isPercentPoint: true },
   { key: "stripeMargin", label: "Margin", category: "Network Management", format: "percent", isPercentPoint: true },

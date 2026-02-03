@@ -86,17 +86,21 @@ export const OPERATIONS_METRIC_SPECS: Record<string, OperationsMetricSpec> = {
     description: "Percentage of defects: vendor-related rescheduling requests plus cancellations with reason codes 4,5,6,7,8,9,17,18",
     format: "percent",
     getDrilldownQuery: (periodStart, periodEnd) => ({
-      sql: `SELECT 'rescheduling' as defect_type, rr.id, rr.booking_id, rr.reason as reason_detail, rr.requested_at as event_date
-            FROM public.rescheduling_requests rr
-            WHERE rr.requested_at >= $1 AND rr.requested_at < $2
-              AND rr.reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')
-            UNION ALL
-            SELECT 'cancellation' as defect_type, cb.id, cb.booking_id, cb.cancel_reason_id::text as reason_detail, b.date_due as event_date
-            FROM public.cancelled_bookings cb
-            INNER JOIN public.bookings b ON b.id = cb.booking_id
-            WHERE b.date_due >= $1 AND b.date_due < $2
-              AND cb.cancel_reason_id IN (4,5,6,7,8,9,17,18)
-            ORDER BY event_date DESC`,
+      sql: `WITH all_defects AS (
+              SELECT 'rescheduling' as defect_type, rr.id, rr.booking_id, rr.reason as reason_detail, rr.requested_at as event_date
+              FROM public.rescheduling_requests rr
+              WHERE rr.requested_at >= $1 AND rr.requested_at < $2
+                AND rr.reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')
+              UNION ALL
+              SELECT 'cancellation' as defect_type, cb.id, cb.booking_id, cb.cancel_reason_id::text as reason_detail, b.date_due as event_date
+              FROM public.cancelled_bookings cb
+              INNER JOIN public.bookings b ON b.id = cb.booking_id
+              WHERE b.date_due >= $1 AND b.date_due < $2
+                AND cb.cancel_reason_id IN (4,5,6,7,8,9,17,18)
+            )
+            SELECT DISTINCT ON (booking_id) defect_type, id, booking_id, reason_detail, event_date
+            FROM all_defects
+            ORDER BY booking_id, event_date DESC`,
       params: [periodStart, periodEnd],
       columns: ["defect_type", "id", "booking_id", "reason_detail", "event_date"],
     }),
@@ -393,17 +397,18 @@ export async function calculateOperationsMetrics(
     : 0;
 
   // Defect %: rescheduling requests with vendor-related reasons + cancellations with specific reasons
+  // Count unique booking_ids, not unique row ids
   const reschedulingDefectsResult = await pool.query(
-    `SELECT COUNT(DISTINCT id) as count FROM public.rescheduling_requests 
+    `SELECT COUNT(DISTINCT booking_id) as count FROM public.rescheduling_requests 
      WHERE requested_at >= $1 AND requested_at < $2
        AND reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')`,
     [periodStart, periodEnd]
   );
   const reschedulingDefects = parseInt(reschedulingDefectsResult.rows[0]?.count || "0");
   
-  // Cancellations with reason codes 4,5,6,7,8,9,17,18
+  // Cancellations with reason codes 4,5,6,7,8,9,17,18 - count unique booking_ids
   const cancellationDefectsResult = await pool.query(
-    `SELECT COUNT(*) as count FROM public.cancelled_bookings cb
+    `SELECT COUNT(DISTINCT cb.booking_id) as count FROM public.cancelled_bookings cb
      INNER JOIN public.bookings b ON b.id = cb.booking_id
      WHERE b.date_due >= $1 AND b.date_due < $2
        AND cb.cancel_reason_id IN (4,5,6,7,8,9,17,18)`,

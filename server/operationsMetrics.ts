@@ -38,7 +38,7 @@ export const OPERATIONS_METRIC_SPECS: Record<string, OperationsMetricSpec> = {
 
   emergencies: {
     id: "emergencies",
-    name: "Emergencies",
+    name: "Emergency Rate",
     category: "Network Management",
     formula: "(COUNT(*) FROM vendor_emergencies WHERE bookings_count > 0) / Bookings Completed * 100",
     sourceTable: "vendor_emergencies",

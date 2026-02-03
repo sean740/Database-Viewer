@@ -15,6 +15,13 @@ import {
   getOperationsMetricSpec,
   type OperationsPeriodMetrics 
 } from "./operationsMetrics";
+import {
+  getCacheKey,
+  isCurrentPeriod,
+  getCacheDuration,
+  getFromCache,
+  setInCache,
+} from "./dashboardCache";
 import { setupAuth, registerAuthRoutes, isAuthenticated, authStorage } from "./replit_integrations/auth";
 import { 
   users, 
@@ -3402,6 +3409,7 @@ Always be helpful and explain your suggestions in simple terms.`;
     try {
       const { database } = req.params;
       const zonesParam = req.query.zones as string | undefined;
+      const forceRefresh = req.query.refresh === "true";
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       
@@ -3409,10 +3417,21 @@ Always be helpful and explain your suggestions in simple terms.`;
         return res.status(401).json({ error: "Unauthorized" });
       }
       
-      const pool = getPool(database);
-      
       // Parse zones filter (comma-separated list of zone abbreviations)
       const selectedZones = zonesParam ? zonesParam.split(',').filter(z => z.trim()) : [];
+      
+      // Check cache first (unless force refresh)
+      const cacheKey = getCacheKey("marketing", database, "weekly", undefined, selectedZones);
+      if (!forceRefresh) {
+        const cachedData = getFromCache<any>(cacheKey);
+        if (cachedData) {
+          console.log(`[Cache HIT] Marketing dashboard: ${cacheKey}`);
+          return res.json({ ...cachedData, fromCache: true });
+        }
+      }
+      console.log(`[Cache MISS] Marketing dashboard: ${cacheKey}${forceRefresh ? ' (force refresh)' : ''}`);
+      
+      const pool = getPool(database);
       
       // Build zone filter subquery for booking-related queries
       // Join path: bookings.address_id -> addresses.id -> addresses.district_id -> districts.id -> districts.abbreviation
@@ -3838,11 +3857,18 @@ Always be helpful and explain your suggestions in simple terms.`;
         details: `Viewed ${weeklyDataWithVariance.length} weeks`,
       });
       
-      res.json({
+      const responseData = {
         weeks: weeklyDataWithVariance,
         generatedAt: new Date().toISOString(),
         selectedZones: selectedZones.length > 0 ? selectedZones : null,
-      });
+      };
+      
+      // Cache the response - use 1-hour cache since it includes current week
+      const cacheDuration = getCacheDuration(true); // Current period = 1 hour
+      setInCache(cacheKey, responseData, cacheDuration);
+      console.log(`[Cache SET] Marketing dashboard: ${cacheKey} (expires in ${cacheDuration / 60000} minutes)`);
+      
+      res.json({ ...responseData, fromCache: false });
     } catch (err) {
       console.error("Error fetching weekly performance:", err);
       res.status(500).json({ error: "Failed to fetch weekly performance data" });
@@ -4306,12 +4332,24 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
     try {
       const { database } = req.params;
       const periodType = (req.query.periodType as string) || "weekly";
+      const forceRefresh = req.query.refresh === "true";
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       
       if (!user) {
         return res.status(401).json({ error: "Unauthorized" });
       }
+      
+      // Check cache first (unless force refresh)
+      const cacheKey = getCacheKey("operations", database, periodType);
+      if (!forceRefresh) {
+        const cachedData = getFromCache<any>(cacheKey);
+        if (cachedData) {
+          console.log(`[Cache HIT] Operations dashboard: ${cacheKey}`);
+          return res.json({ ...cachedData, fromCache: true });
+        }
+      }
+      console.log(`[Cache MISS] Operations dashboard: ${cacheKey}${forceRefresh ? ' (force refresh)' : ''}`);
       
       const pool = getPool(database);
       
@@ -4426,11 +4464,18 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
         });
       }
       
-      res.json({
+      const responseData = {
         periods: results,
         stripeConnected: false,
         periodType,
-      });
+      };
+      
+      // Cache the response - use 1-hour cache since it includes current period
+      const cacheDuration = getCacheDuration(true); // Current period = 1 hour
+      setInCache(cacheKey, responseData, cacheDuration);
+      console.log(`[Cache SET] Operations dashboard: ${cacheKey} (expires in ${cacheDuration / 60000} minutes)`);
+      
+      res.json({ ...responseData, fromCache: false });
     } catch (error: any) {
       console.error("Operations performance error:", error);
       res.status(500).json({ error: "Failed to fetch operations metrics", message: error.message });

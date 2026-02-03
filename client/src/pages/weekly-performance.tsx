@@ -197,6 +197,7 @@ export default function WeeklyPerformance() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const [forceRefresh, setForceRefresh] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   
@@ -243,18 +244,33 @@ export default function WeeklyPerformance() {
     refetch,
     isRefetching 
   } = useQuery<WeeklyPerformanceResponse>({
-    queryKey: ["/api/weekly-performance", selectedDatabase, selectedZones.join(",")],
+    queryKey: ["/api/weekly-performance", selectedDatabase, selectedZones.join(","), forceRefresh],
     queryFn: async () => {
-      const response = await fetch(`/api/weekly-performance/${selectedDatabase}${zonesQueryParam}`, {
+      const refreshParam = forceRefresh ? (zonesQueryParam ? "&refresh=true" : "?refresh=true") : "";
+      const response = await fetch(`/api/weekly-performance/${selectedDatabase}${zonesQueryParam}${refreshParam}`, {
         credentials: "include",
       });
       if (!response.ok) {
         throw new Error("Failed to fetch weekly performance data");
       }
-      return response.json();
+      const data = await response.json();
+      // Reset forceRefresh after successful fetch
+      if (forceRefresh) setForceRefresh(false);
+      return data;
     },
     enabled: !!selectedDatabase,
   });
+  
+  const handleRefresh = () => {
+    setForceRefresh(true);
+  };
+  
+  // Trigger refetch when forceRefresh changes to true
+  useEffect(() => {
+    if (forceRefresh) {
+      refetch();
+    }
+  }, [forceRefresh, refetch]);
   
   // Zone selection handlers
   const toggleZone = (zone: string) => {
@@ -504,7 +520,7 @@ export default function WeeklyPerformance() {
               <Button 
                 variant="outline" 
                 size="sm" 
-                onClick={() => refetch()}
+                onClick={handleRefresh}
                 disabled={isRefetching}
                 className="gap-2"
                 data-testid="button-refresh"

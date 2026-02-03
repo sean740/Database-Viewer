@@ -177,6 +177,17 @@ filters.json       # Admin-configured filter definitions (per table)
   - External customers can only access their granted tables
   - All report queries are audited
 
+### Dashboard Caching System
+- Both Marketing and Operations dashboards implement server-side global caching
+- Cache is stored in-memory and shared across all users (reduces database load significantly)
+- **Cache durations**:
+  - Current period (week/month still in progress): 1 hour cache
+  - Historical periods: 1 week cache
+- **Refresh button**: Users can bypass cache by clicking "Refresh" button, which passes `?refresh=true` to the API
+- **Cache keys**: Include dashboard type, database name, period type, and zone filters (for Marketing dashboard)
+- **Implementation**: `server/dashboardCache.ts` module provides caching utilities
+- Response includes `fromCache: true/false` to indicate whether data came from cache
+
 ## Development
 
 The app runs with `npm run dev` which starts both the Express backend and Vite frontend dev server.

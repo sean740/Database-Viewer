@@ -247,6 +247,7 @@ export default function OperationsPerformance() {
   const [periodType, setPeriodType] = useState<"weekly" | "monthly">("weekly");
   const [networkManagementOpen, setNetworkManagementOpen] = useState(true);
   const [supplyManagementOpen, setSupplyManagementOpen] = useState(true);
+  const [forceRefresh, setForceRefresh] = useState(false);
 
   const { data: databases, isLoading: databasesLoading } = useQuery<DatabaseConnection[]>({
     queryKey: ["/api/databases"],
@@ -265,16 +266,31 @@ export default function OperationsPerformance() {
     refetch,
     isFetching 
   } = useQuery<OperationsPerformanceResponse>({
-    queryKey: ["/api/operations-performance", selectedDatabase, periodType],
+    queryKey: ["/api/operations-performance", selectedDatabase, periodType, forceRefresh],
     queryFn: async () => {
       if (!selectedDatabase) return null;
-      const response = await fetch(`/api/operations-performance/${encodeURIComponent(selectedDatabase)}?periodType=${periodType}`);
+      const refreshParam = forceRefresh ? "&refresh=true" : "";
+      const response = await fetch(`/api/operations-performance/${encodeURIComponent(selectedDatabase)}?periodType=${periodType}${refreshParam}`);
       if (!response.ok) throw new Error("Failed to fetch operations data");
-      return response.json();
+      const data = await response.json();
+      // Reset forceRefresh after successful fetch
+      if (forceRefresh) setForceRefresh(false);
+      return data;
     },
     enabled: !!selectedDatabase,
     staleTime: 1000 * 60 * 5,
   });
+
+  const handleRefresh = () => {
+    setForceRefresh(true);
+  };
+
+  // Trigger refetch when forceRefresh changes to true
+  useEffect(() => {
+    if (forceRefresh) {
+      refetch();
+    }
+  }, [forceRefresh, refetch]);
 
   const periods = operationsData?.periods || [];
   const selectedPeriod = periods[selectedPeriodIndex];
@@ -341,7 +357,7 @@ export default function OperationsPerformance() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => refetch()}
+                onClick={handleRefresh}
                 disabled={isFetching}
                 data-testid="button-refresh"
               >

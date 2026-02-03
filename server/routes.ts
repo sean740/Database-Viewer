@@ -17,7 +17,6 @@ import {
 } from "./operationsMetrics";
 import {
   getCacheKey,
-  isCurrentPeriod,
   getCacheDuration,
   getFromCache,
   setInCache,
@@ -4479,6 +4478,344 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
     } catch (error: any) {
       console.error("Operations performance error:", error);
       res.status(500).json({ error: "Failed to fetch operations metrics", message: error.message });
+    }
+  });
+
+  // Operations Performance Dashboard AI Chat
+  app.post("/api/operations-performance/:database/chat", isAuthenticated, reportAILimiter, async (req, res) => {
+    try {
+      const { database } = req.params;
+      const { message, dashboardData, selectedPeriod, periodType } = req.body;
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      
+      if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      
+      if (!message) {
+        return res.status(400).json({ error: "Message is required" });
+      }
+      
+      const client = getOpenAIClient();
+      if (!client) {
+        return res.status(503).json({ error: "AI service not available" });
+      }
+      
+      const pool = getPool(database);
+      
+      // Check if user can drill down (Admin or WashOS User only)
+      const canDrillDown = user.role === "admin" || user.role === "washos_user";
+      
+      // Build context about the dashboard data
+      const currentYear = new Date().getFullYear();
+      const availablePeriodsContext = dashboardData?.periods?.length > 0
+        ? `Available ${periodType === 'monthly' ? 'months' : 'weeks'} with their EXACT date ranges (use these dates for drill-down):\n${dashboardData.periods.map((p: any) => 
+            `- "${p.periodLabel}": periodStart="${p.periodStart}", periodEnd="${p.periodEnd}"`
+          ).join('\n')}`
+        : '';
+      
+      const metricsContext = dashboardData?.periods?.length > 0 
+        ? `The dashboard currently shows ${dashboardData.periods.length} ${periodType === 'monthly' ? 'months' : 'weeks'} of data.
+          
+The most recent ${periodType === 'monthly' ? 'month' : 'week'} (${dashboardData.periods[0]?.periodLabel || 'Current'}) has these metrics:
+${JSON.stringify(dashboardData.periods[0]?.metrics || {}, null, 2)}
+
+${dashboardData.periods[0]?.variance ? `Period-over-period variance (% change, or percentage point change for rates):
+${JSON.stringify(dashboardData.periods[0].variance, null, 2)}` : ''}
+
+${dashboardData.periods.length > 1 ? `Previous ${periodType === 'monthly' ? 'month' : 'week'} (${dashboardData.periods[1]?.periodLabel}) metrics:
+${JSON.stringify(dashboardData.periods[1]?.metrics || {}, null, 2)}` : ''}
+`
+        : "No dashboard data is currently loaded.";
+      
+      // Build metric specs context for AI
+      const metricSpecsList = getAllOperationsMetricSpecs().map(m => 
+        `- ${m.name} (id: ${m.id}): ${m.description}\n  Formula: ${m.formula}\n  Category: ${m.category}`
+      ).join("\n\n");
+      
+      const systemPrompt = `You are an AI assistant for the WashOS Operations Performance Dashboard. Your role is to help users understand and analyze their operations metrics.
+
+IMPORTANT: The current year is ${currentYear}. When users mention dates, they mean ${currentYear}, NOT any other year.
+
+DASHBOARD CONTEXT:
+The Operations Performance Dashboard tracks these key metrics for network management and supply management:
+
+METRIC DEFINITIONS AND FORMULAS:
+${metricSpecsList}
+
+CURRENT DATA:
+${metricsContext}
+
+${selectedPeriod ? `SELECTED ${periodType === 'monthly' ? 'MONTH' : 'WEEK'}: ${selectedPeriod.periodLabel} (${selectedPeriod.periodStart} to ${selectedPeriod.periodEnd})` : ''}
+
+${availablePeriodsContext}
+
+CRITICAL: When calling get_metric_rows, you MUST use the EXACT periodStart and periodEnd values from the available periods list above. Look up the period label the user mentions and use its corresponding periodStart and periodEnd values. Do NOT make up date values.
+
+${canDrillDown ? `DRILL-DOWN CAPABILITY:
+You have access to tools to fetch the actual database rows that make up each metric.
+When users ask "what went into this number", "show me the details", "export the data", or want to see the underlying rows, use the get_metric_rows tool.
+When users ask "how is this calculated", use the get_metric_details tool for the exact formula.` : 'Note: Drill-down to underlying data rows is not available for this user role.'}
+
+INSTRUCTIONS:
+1. Answer questions about the metrics, trends, and performance
+2. Help users understand what the numbers mean and provide insights
+3. Compare periods when relevant data is available
+4. Explain variances and what might be driving changes
+5. Be concise but informative
+6. Format numbers appropriately (percentages with %, counts as whole numbers, ratings to 2 decimal places)
+7. For operations metrics, lower is generally better for: Emergencies, Defect %, Overbooked %, Dismissed Vendors
+   Higher is generally better for: Delivery Rate, Rating, Response Rate, Margin, Active Vendors, New Vendors, Utilization
+${canDrillDown ? '8. When users want to see underlying data, use the tools to fetch and display it' : ''}`;
+
+      // Define tools for function calling (only if user can drill down)
+      const tools = canDrillDown ? [
+        {
+          type: "function" as const,
+          function: {
+            name: "get_metric_details",
+            description: "Get the exact calculation formula and description for a specific operations metric",
+            parameters: {
+              type: "object",
+              properties: {
+                metricId: {
+                  type: "string",
+                  description: "The metric ID (e.g., bookingsCompleted, emergencies, deliveryRate)",
+                  enum: Object.keys(OPERATIONS_METRIC_SPECS),
+                },
+              },
+              required: ["metricId"],
+            },
+          },
+        },
+        {
+          type: "function" as const,
+          function: {
+            name: "get_metric_rows",
+            description: "Fetch the actual database rows that contribute to a metric for a specific period. Returns up to 50 rows as a preview with a CSV download option for full data.",
+            parameters: {
+              type: "object",
+              properties: {
+                metricId: {
+                  type: "string",
+                  description: "The metric ID (e.g., bookingsCompleted, emergencies, deliveryRate)",
+                  enum: Object.keys(OPERATIONS_METRIC_SPECS),
+                },
+                periodStart: {
+                  type: "string",
+                  description: "ISO date string for the start of the period (UTC)",
+                },
+                periodEnd: {
+                  type: "string",
+                  description: "ISO date string for the end of the period (UTC)",
+                },
+              },
+              required: ["metricId", "periodStart", "periodEnd"],
+            },
+          },
+        },
+      ] : undefined;
+
+      // Initial AI call
+      const messages: any[] = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message }
+      ];
+
+      let response = await client.chat.completions.create({
+        model: AI_CONFIG.reportChat.model,
+        messages,
+        tools,
+        temperature: 0.7,
+        max_tokens: 2000,
+      });
+
+      let assistantMessage = response.choices[0]?.message;
+      const toolResults: any[] = [];
+
+      // Handle tool calls
+      while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
+        messages.push(assistantMessage);
+        
+        for (const toolCall of assistantMessage.tool_calls) {
+          let result: any;
+          
+          if (toolCall.function.name === "get_metric_details") {
+            const args = JSON.parse(toolCall.function.arguments);
+            const spec = getOperationsMetricSpec(args.metricId);
+            if (spec) {
+              result = {
+                name: spec.name,
+                category: spec.category,
+                formula: spec.formula,
+                description: spec.description,
+                sourceTable: spec.sourceTable,
+                sourceTables: spec.sourceTables,
+              };
+            } else {
+              result = { error: "Unknown metric" };
+            }
+          } else if (toolCall.function.name === "get_metric_rows") {
+            const args = JSON.parse(toolCall.function.arguments);
+            const spec = getOperationsMetricSpec(args.metricId);
+            
+            if (!spec) {
+              result = { error: "Unknown metric" };
+            } else {
+              const queryConfig = spec.getDrilldownQuery(args.periodStart, args.periodEnd);
+              
+              try {
+                const queryResult = await pool.query(
+                  queryConfig.sql + " LIMIT 50",
+                  queryConfig.params
+                );
+                
+                // Get total count
+                const countSql = `SELECT COUNT(*) as total FROM (${queryConfig.sql}) as subq`;
+                const countResult = await pool.query(countSql, queryConfig.params);
+                const totalCount = parseInt(countResult.rows[0]?.total || "0");
+                
+                result = {
+                  metricName: spec.name,
+                  columns: queryConfig.columns,
+                  rows: queryResult.rows,
+                  totalCount,
+                  previewCount: queryResult.rows.length,
+                  hasMore: totalCount > 50,
+                  csvExportAvailable: totalCount > 0,
+                };
+                
+                // Store for CSV export
+                toolResults.push({
+                  metricId: args.metricId,
+                  periodStart: args.periodStart,
+                  periodEnd: args.periodEnd,
+                  ...result,
+                });
+                
+                await logAudit({
+                  userId,
+                  userEmail: user.email,
+                  action: "OPERATIONS_PERFORMANCE_DRILLDOWN",
+                  database,
+                  details: `Metric: ${spec.name}, ${totalCount} rows`,
+                  ip: req.ip || undefined,
+                });
+              } catch (queryErr) {
+                console.error("Drilldown query error:", queryErr);
+                result = { error: "Failed to fetch data" };
+              }
+            }
+          }
+          
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(result),
+          });
+        }
+        
+        // Continue conversation with tool results
+        response = await client.chat.completions.create({
+          model: AI_CONFIG.reportChat.model,
+          messages,
+          tools,
+          temperature: 0.7,
+          max_tokens: 2000,
+        });
+        
+        assistantMessage = response.choices[0]?.message;
+      }
+      
+      const finalMessage = assistantMessage?.content || "I apologize, but I couldn't generate a response. Please try again.";
+      
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "OPERATIONS_PERFORMANCE_AI_CHAT",
+        database,
+        details: `AI chat message: ${message.substring(0, 100)}...`,
+        ip: req.ip || undefined,
+      });
+      
+      res.json({ 
+        message: finalMessage,
+        drilldownData: toolResults.length > 0 ? toolResults : undefined,
+      });
+    } catch (err) {
+      console.error("Error in operations performance AI chat:", err);
+      res.status(500).json({ error: "Failed to process AI request" });
+    }
+  });
+  
+  // CSV Export for operations drilldown data
+  app.get("/api/operations-performance/:database/drilldown-export", isAuthenticated, exportLimiter, async (req, res) => {
+    try {
+      const { database } = req.params;
+      const { metricId, periodStart, periodEnd } = req.query;
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      
+      if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      
+      // Only Admin and WashOS User can export
+      if (user.role !== "admin" && user.role !== "washos_user") {
+        return res.status(403).json({ error: "Export not available for this user role" });
+      }
+      
+      if (!metricId || !periodStart || !periodEnd) {
+        return res.status(400).json({ error: "Missing required parameters" });
+      }
+      
+      const spec = getOperationsMetricSpec(metricId as string);
+      if (!spec) {
+        return res.status(400).json({ error: "Unknown metric" });
+      }
+      
+      const pool = getPool(database);
+      const queryConfig = spec.getDrilldownQuery(periodStart as string, periodEnd as string);
+      
+      // Get up to 10,000 rows for export
+      const result = await pool.query(
+        queryConfig.sql + " LIMIT 10000",
+        queryConfig.params
+      );
+      
+      // Convert to CSV
+      const headers = queryConfig.columns.join(",");
+      const rows = result.rows.map((row: any) => 
+        queryConfig.columns.map(col => {
+          const val = row[col];
+          if (val === null || val === undefined) return "";
+          const str = String(val);
+          // Escape quotes and wrap in quotes if contains comma, quote, or newline
+          if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+            return `"${str.replace(/"/g, '""')}"`;
+          }
+          return str;
+        }).join(",")
+      ).join("\n");
+      
+      const csv = headers + "\n" + rows;
+      
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "OPERATIONS_DRILLDOWN_EXPORT",
+        database,
+        details: `Metric: ${spec.name}, Exported ${result.rows.length} rows`,
+        ip: req.ip || undefined,
+      });
+      
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename="${metricId}_${periodStart}_to_${periodEnd}.csv"`);
+      res.send(csv);
+    } catch (err) {
+      console.error("Error in operations drilldown export:", err);
+      res.status(500).json({ error: "Failed to export data" });
     }
   });
 

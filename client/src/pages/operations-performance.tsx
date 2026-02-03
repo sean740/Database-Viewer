@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, Star, Truck, Users, BarChart3, Percent, ChevronDown, AlertTriangle, Clock, UserCheck, UserMinus, Bot, User, Send, X, MessageSquare, Download, Table2 } from "lucide-react";
+import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, Star, Truck, Users, BarChart3, Percent, ChevronDown, AlertTriangle, Clock, UserCheck, UserMinus, Bot, User, Send, X, MessageSquare, Download, Table2, MapPin, Check } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Header } from "@/components/header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -272,6 +277,10 @@ export default function OperationsPerformance() {
   const [supplyManagementOpen, setSupplyManagementOpen] = useState(true);
   const forceRefreshRef = useRef(false);
   
+  // Zone filter state
+  const [selectedZones, setSelectedZones] = useState<string[]>([]);
+  const [zonesPopoverOpen, setZonesPopoverOpen] = useState(false);
+  
   // Chat state
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState("");
@@ -283,24 +292,50 @@ export default function OperationsPerformance() {
     queryKey: ["/api/databases"],
   });
 
+  // Fetch available zones for the selected database
+  const { data: zonesData } = useQuery<string[]>({
+    queryKey: ["/api/zones", selectedDatabase],
+    queryFn: async () => {
+      const response = await fetch(`/api/zones/${selectedDatabase}`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error("Failed to fetch zones");
+      }
+      return response.json();
+    },
+    enabled: !!selectedDatabase,
+  });
+  
+  const availableZones = zonesData || [];
+
   // Auto-select first database when available
   useEffect(() => {
     if (databases && databases.length > 0 && !selectedDatabase) {
       setSelectedDatabase(databases[0].name);
     }
   }, [databases, selectedDatabase]);
+  
+  // Reset selected period and zones when database changes
+  useEffect(() => {
+    setSelectedPeriodIndex(0);
+    setSelectedZones([]);
+  }, [selectedDatabase]);
 
+  // Build query string for zones filter
+  const zonesQueryParam = selectedZones.length > 0 ? `&zones=${selectedZones.join(",")}` : "";
+  
   const { 
     data: operationsData, 
     isLoading: operationsLoading, 
     refetch,
     isFetching 
   } = useQuery<OperationsPerformanceResponse>({
-    queryKey: ["/api/operations-performance", selectedDatabase, periodType],
+    queryKey: ["/api/operations-performance", selectedDatabase, periodType, selectedZones.join(",")],
     queryFn: async () => {
       if (!selectedDatabase) return null;
       const refreshParam = forceRefreshRef.current ? "&refresh=true" : "";
-      const response = await fetch(`/api/operations-performance/${encodeURIComponent(selectedDatabase)}?periodType=${periodType}${refreshParam}`);
+      const response = await fetch(`/api/operations-performance/${encodeURIComponent(selectedDatabase)}?periodType=${periodType}${zonesQueryParam}${refreshParam}`);
       if (!response.ok) throw new Error("Failed to fetch operations data");
       const data = await response.json();
       forceRefreshRef.current = false;
@@ -313,6 +348,23 @@ export default function OperationsPerformance() {
   const handleRefresh = () => {
     forceRefreshRef.current = true;
     refetch();
+  };
+  
+  // Zone selection handlers
+  const toggleZone = (zone: string) => {
+    setSelectedZones((prev) =>
+      prev.includes(zone)
+        ? prev.filter((z) => z !== zone)
+        : [...prev, zone]
+    );
+  };
+  
+  const selectAllZones = () => {
+    setSelectedZones([...availableZones]);
+  };
+  
+  const clearZones = () => {
+    setSelectedZones([]);
   };
 
   const periods = operationsData?.periods || [];
@@ -456,6 +508,80 @@ export default function OperationsPerformance() {
                   <SelectItem value="monthly">Monthly</SelectItem>
                 </SelectContent>
               </Select>
+              
+              {availableZones.length > 0 && (
+                <Popover open={zonesPopoverOpen} onOpenChange={setZonesPopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      data-testid="button-zone-filter"
+                    >
+                      <MapPin className="h-4 w-4" />
+                      {selectedZones.length === 0 
+                        ? "All Zones" 
+                        : selectedZones.length === availableZones.length
+                        ? "All Zones"
+                        : `${selectedZones.length} Zone${selectedZones.length === 1 ? "" : "s"}`}
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-64 p-2" align="end">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between px-2 pb-2 border-b">
+                        <span className="text-sm font-medium">Filter by Zone</span>
+                        <div className="flex gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={selectAllZones}
+                            data-testid="button-select-all-zones"
+                          >
+                            All
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={clearZones}
+                            data-testid="button-clear-zones"
+                          >
+                            Clear
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="max-h-[280px] overflow-y-auto space-y-0.5">
+                        {availableZones.map((zone) => (
+                          <button
+                            key={zone}
+                            onClick={() => toggleZone(zone)}
+                            className={cn(
+                              "w-full flex items-center justify-between px-2 py-1.5 rounded text-sm",
+                              "hover-elevate transition-colors",
+                              selectedZones.includes(zone) && "bg-accent"
+                            )}
+                            data-testid={`zone-option-${zone}`}
+                          >
+                            <span>{zone}</span>
+                            {selectedZones.includes(zone) && (
+                              <Check className="h-4 w-4 text-primary" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      {selectedZones.length > 0 && (
+                        <div className="pt-2 border-t">
+                          <p className="text-xs text-muted-foreground px-2">
+                            Note: Zone filter applies to booking and vendor metrics
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              )}
 
               <Button
                 variant="outline"
@@ -505,12 +631,20 @@ export default function OperationsPerformance() {
             {selectedPeriod && (
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-lg flex items-center gap-2">
+                  <CardTitle className="text-lg flex items-center gap-2 flex-wrap">
                     <Calendar className="h-5 w-5" />
                     {selectedPeriod.periodLabel}
                     <Badge variant="outline" className="ml-2">
                       {periodType === "weekly" ? "Week" : "Month"} Selected
                     </Badge>
+                    {selectedZones.length > 0 && selectedZones.length < availableZones.length && (
+                      <Badge variant="outline" className="gap-1 text-xs" data-testid="badge-zone-filter">
+                        <MapPin className="h-3 w-3" />
+                        {selectedZones.length === 1 
+                          ? selectedZones[0] 
+                          : `${selectedZones.length} zones`}
+                      </Badge>
+                    )}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>

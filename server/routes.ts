@@ -4332,6 +4332,8 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       const { database } = req.params;
       const periodType = (req.query.periodType as string) || "weekly";
       const forceRefresh = req.query.refresh === "true";
+      const zonesParam = req.query.zones as string;
+      const selectedZones: string[] = zonesParam ? zonesParam.split(",").filter(Boolean) : [];
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       
@@ -4339,8 +4341,9 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
         return res.status(401).json({ error: "Unauthorized" });
       }
       
-      // Check cache first (unless force refresh)
-      const cacheKey = getCacheKey("operations", database, periodType);
+      // Check cache first (unless force refresh) - include zones in cache key
+      const zonesKey = selectedZones.length > 0 ? `_zones:${selectedZones.sort().join(",")}` : "";
+      const cacheKey = getCacheKey("operations", database, periodType) + zonesKey;
       if (!forceRefresh) {
         const cachedData = getFromCache<any>(cacheKey);
         if (cachedData) {
@@ -4443,13 +4446,13 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
         const period = limitedPeriods[i];
         
         // Calculate metrics without Stripe data (uses database margin values instead)
-        const metrics = await calculateOperationsMetrics(pool, period.startUTC, period.endUTC, null);
+        const metrics = await calculateOperationsMetrics(pool, period.startUTC, period.endUTC, null, selectedZones);
         
         // Get previous period metrics for variance
         let variance: Record<string, number | null> = {};
         if (i < limitedPeriods.length - 1) {
           const prevPeriod = limitedPeriods[i + 1];
-          const prevMetrics = await calculateOperationsMetrics(pool, prevPeriod.startUTC, prevPeriod.endUTC, null);
+          const prevMetrics = await calculateOperationsMetrics(pool, prevPeriod.startUTC, prevPeriod.endUTC, null, selectedZones);
           variance = calculateOperationsVariance(metrics, prevMetrics);
         }
         

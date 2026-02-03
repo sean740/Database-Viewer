@@ -186,6 +186,8 @@ filters.json       # Admin-configured filter definitions (per table)
 - **Refresh button**: Users can bypass cache by clicking "Refresh" button, which passes `?refresh=true` to the API
 - **Cache keys**: Include dashboard type, database name, period type, and zone filters (for Marketing dashboard)
 - **Implementation**: `server/dashboardCache.ts` module provides caching utilities
+- **LRU Eviction**: Cache has a maximum of 100 entries; oldest accessed entries are evicted when limit is reached
+- **Expired Cleanup**: Expired entries are cleaned up on each cache write
 - Response includes `fromCache: true/false` to indicate whether data came from cache
 
 ## Development

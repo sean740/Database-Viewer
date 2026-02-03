@@ -2,6 +2,7 @@ interface CacheEntry<T> {
   data: T;
   timestamp: number;
   expiresAt: number;
+  lastAccessed: number;
 }
 
 interface DashboardCacheStore {
@@ -12,6 +13,7 @@ const cache: DashboardCacheStore = {};
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 100;
 
 export function getCacheKey(
   dashboardType: "marketing" | "operations",
@@ -24,23 +26,43 @@ export function getCacheKey(
   return `${dashboardType}:${database}:${periodType}:${periodIdentifier || "all"}:${zonesKey}`;
 }
 
-export function isCurrentPeriod(periodStart: string, periodType: "weekly" | "monthly"): boolean {
-  const now = new Date();
-  const periodStartDate = new Date(periodStart);
-  
-  if (periodType === "monthly") {
-    return (
-      periodStartDate.getFullYear() === now.getFullYear() &&
-      periodStartDate.getMonth() === now.getMonth()
-    );
-  } else {
-    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    return periodStartDate >= weekAgo;
-  }
-}
-
 export function getCacheDuration(isCurrentPeriod: boolean): number {
   return isCurrentPeriod ? ONE_HOUR_MS : ONE_WEEK_MS;
+}
+
+function evictOldestEntry(): void {
+  const keys = Object.keys(cache);
+  if (keys.length === 0) return;
+
+  let oldestKey = keys[0];
+  let oldestTime = cache[oldestKey].lastAccessed;
+
+  for (const key of keys) {
+    if (cache[key].lastAccessed < oldestTime) {
+      oldestTime = cache[key].lastAccessed;
+      oldestKey = key;
+    }
+  }
+
+  delete cache[oldestKey];
+  console.log(`[Cache EVICT] Removed oldest entry: ${oldestKey}`);
+}
+
+function cleanupExpiredEntries(): void {
+  const now = Date.now();
+  const keys = Object.keys(cache);
+  let removed = 0;
+
+  for (const key of keys) {
+    if (cache[key].expiresAt < now) {
+      delete cache[key];
+      removed++;
+    }
+  }
+
+  if (removed > 0) {
+    console.log(`[Cache CLEANUP] Removed ${removed} expired entries`);
+  }
 }
 
 export function getFromCache<T>(key: string): T | null {
@@ -55,15 +77,23 @@ export function getFromCache<T>(key: string): T | null {
     return null;
   }
   
+  entry.lastAccessed = now;
   return entry.data as T;
 }
 
 export function setInCache<T>(key: string, data: T, durationMs: number): void {
+  cleanupExpiredEntries();
+  
+  if (Object.keys(cache).length >= MAX_CACHE_ENTRIES && !cache[key]) {
+    evictOldestEntry();
+  }
+  
   const now = Date.now();
   cache[key] = {
     data,
     timestamp: now,
     expiresAt: now + durationMs,
+    lastAccessed: now,
   };
 }
 

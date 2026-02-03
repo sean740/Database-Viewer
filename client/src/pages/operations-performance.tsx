@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { ArrowLeft, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, Calendar, Star, Truck, Users, BarChart3, Percent, ChevronDown, AlertTriangle, Clock, UserCheck, UserMinus } from "lucide-react";
@@ -247,7 +247,7 @@ export default function OperationsPerformance() {
   const [periodType, setPeriodType] = useState<"weekly" | "monthly">("weekly");
   const [networkManagementOpen, setNetworkManagementOpen] = useState(true);
   const [supplyManagementOpen, setSupplyManagementOpen] = useState(true);
-  const [forceRefresh, setForceRefresh] = useState(false);
+  const forceRefreshRef = useRef(false);
 
   const { data: databases, isLoading: databasesLoading } = useQuery<DatabaseConnection[]>({
     queryKey: ["/api/databases"],
@@ -266,15 +266,14 @@ export default function OperationsPerformance() {
     refetch,
     isFetching 
   } = useQuery<OperationsPerformanceResponse>({
-    queryKey: ["/api/operations-performance", selectedDatabase, periodType, forceRefresh],
+    queryKey: ["/api/operations-performance", selectedDatabase, periodType],
     queryFn: async () => {
       if (!selectedDatabase) return null;
-      const refreshParam = forceRefresh ? "&refresh=true" : "";
+      const refreshParam = forceRefreshRef.current ? "&refresh=true" : "";
       const response = await fetch(`/api/operations-performance/${encodeURIComponent(selectedDatabase)}?periodType=${periodType}${refreshParam}`);
       if (!response.ok) throw new Error("Failed to fetch operations data");
       const data = await response.json();
-      // Reset forceRefresh after successful fetch
-      if (forceRefresh) setForceRefresh(false);
+      forceRefreshRef.current = false;
       return data;
     },
     enabled: !!selectedDatabase,
@@ -282,15 +281,9 @@ export default function OperationsPerformance() {
   });
 
   const handleRefresh = () => {
-    setForceRefresh(true);
+    forceRefreshRef.current = true;
+    refetch();
   };
-
-  // Trigger refetch when forceRefresh changes to true
-  useEffect(() => {
-    if (forceRefresh) {
-      refetch();
-    }
-  }, [forceRefresh, refetch]);
 
   const periods = operationsData?.periods || [];
   const selectedPeriod = periods[selectedPeriodIndex];

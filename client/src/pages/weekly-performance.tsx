@@ -197,7 +197,7 @@ export default function WeeklyPerformance() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
-  const [forceRefresh, setForceRefresh] = useState(false);
+  const forceRefreshRef = useRef(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   
@@ -244,9 +244,9 @@ export default function WeeklyPerformance() {
     refetch,
     isRefetching 
   } = useQuery<WeeklyPerformanceResponse>({
-    queryKey: ["/api/weekly-performance", selectedDatabase, selectedZones.join(","), forceRefresh],
+    queryKey: ["/api/weekly-performance", selectedDatabase, selectedZones.join(",")],
     queryFn: async () => {
-      const refreshParam = forceRefresh ? (zonesQueryParam ? "&refresh=true" : "?refresh=true") : "";
+      const refreshParam = forceRefreshRef.current ? (zonesQueryParam ? "&refresh=true" : "?refresh=true") : "";
       const response = await fetch(`/api/weekly-performance/${selectedDatabase}${zonesQueryParam}${refreshParam}`, {
         credentials: "include",
       });
@@ -254,23 +254,16 @@ export default function WeeklyPerformance() {
         throw new Error("Failed to fetch weekly performance data");
       }
       const data = await response.json();
-      // Reset forceRefresh after successful fetch
-      if (forceRefresh) setForceRefresh(false);
+      forceRefreshRef.current = false;
       return data;
     },
     enabled: !!selectedDatabase,
   });
   
   const handleRefresh = () => {
-    setForceRefresh(true);
+    forceRefreshRef.current = true;
+    refetch();
   };
-  
-  // Trigger refetch when forceRefresh changes to true
-  useEffect(() => {
-    if (forceRefresh) {
-      refetch();
-    }
-  }, [forceRefresh, refetch]);
   
   // Zone selection handlers
   const toggleZone = (zone: string) => {

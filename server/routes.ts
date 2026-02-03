@@ -7,6 +7,14 @@ import { eq, and, desc, count } from "drizzle-orm";
 import { storage } from "./storage";
 import { db } from "./db";
 import { getStripeMetricsForWeek, checkStripeConnection, type StripeWeeklyMetrics } from "./stripeClient";
+import { 
+  calculateOperationsMetrics, 
+  calculateOperationsVariance, 
+  OPERATIONS_METRIC_SPECS,
+  getAllOperationsMetricSpecs,
+  getOperationsMetricSpec,
+  type OperationsPeriodMetrics 
+} from "./operationsMetrics";
 import { setupAuth, registerAuthRoutes, isAuthenticated, authStorage } from "./replit_integrations/auth";
 import { 
   users, 
@@ -4290,6 +4298,171 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       res.json({ connected });
     } catch (error) {
       res.json({ connected: false });
+    }
+  });
+
+  // Operations Performance Dashboard endpoint
+  app.get("/api/operations-performance/:database", isAuthenticated, async (req, res) => {
+    try {
+      const { database } = req.params;
+      const periodType = (req.query.periodType as string) || "weekly";
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      
+      if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      
+      const pool = getPool(database);
+      
+      // Helper to get PST offset for a given date (handles DST)
+      const getPSTOffset = (date: Date): string => {
+        const month = date.getMonth();
+        if (month > 2 && month < 10) {
+          return "-07:00"; // PDT
+        } else if (month < 2 || month > 10) {
+          return "-08:00"; // PST
+        } else if (month === 2) {
+          const day = date.getDate();
+          const dayOfWeek = date.getDay();
+          const secondSunday = 14 - (new Date(date.getFullYear(), 2, 1).getDay() || 7);
+          if (day >= secondSunday) return "-07:00";
+          return "-08:00";
+        } else {
+          const day = date.getDate();
+          const firstSunday = 7 - (new Date(date.getFullYear(), 10, 1).getDay() || 7);
+          if (day >= firstSunday) return "-08:00";
+          return "-07:00";
+        }
+      };
+      
+      // Generate periods based on periodType
+      const periods: { startUTC: string; endUTC: string; label: string }[] = [];
+      const now = new Date();
+      
+      if (periodType === "monthly") {
+        // Generate last 12 months
+        for (let i = 0; i < 12; i++) {
+          const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+          
+          const startOffset = getPSTOffset(monthStart);
+          const endOffset = getPSTOffset(monthEnd);
+          
+          const startUTC = new Date(`${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01T00:00:00${startOffset}`).toISOString();
+          const endUTC = new Date(`${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-01T00:00:00${endOffset}`).toISOString();
+          
+          const monthLabel = monthStart.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+          
+          periods.push({ startUTC, endUTC, label: monthLabel });
+        }
+      } else {
+        // Weekly: Generate weeks from Dec 29, 2025 to current week (Mon-Sun, PST)
+        const startDate = new Date("2025-12-29T00:00:00-08:00");
+        
+        let currentMonday = new Date(now);
+        currentMonday.setDate(currentMonday.getDate() - ((currentMonday.getDay() + 6) % 7));
+        currentMonday.setHours(0, 0, 0, 0);
+        
+        let weekStart = startDate;
+        while (weekStart <= currentMonday) {
+          const weekEnd = new Date(weekStart);
+          weekEnd.setDate(weekEnd.getDate() + 7);
+          
+          const startOffset = getPSTOffset(weekStart);
+          const endOffset = getPSTOffset(weekEnd);
+          
+          const year = weekStart.getFullYear();
+          const month = String(weekStart.getMonth() + 1).padStart(2, '0');
+          const day = String(weekStart.getDate()).padStart(2, '0');
+          const startUTC = new Date(`${year}-${month}-${day}T00:00:00${startOffset}`).toISOString();
+          
+          const endYear = weekEnd.getFullYear();
+          const endMonth = String(weekEnd.getMonth() + 1).padStart(2, '0');
+          const endDay = String(weekEnd.getDate()).padStart(2, '0');
+          const endUTC = new Date(`${endYear}-${endMonth}-${endDay}T00:00:00${endOffset}`).toISOString();
+          
+          const weekLabel = `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(weekEnd.getTime() - 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+          
+          periods.push({ startUTC, endUTC, label: weekLabel });
+          
+          weekStart = weekEnd;
+        }
+      }
+      
+      // Reverse to show most recent first
+      periods.reverse();
+      
+      // Limit to 52 weeks or 12 months
+      const limitedPeriods = periods.slice(0, periodType === "monthly" ? 12 : 52);
+      
+      // Check Stripe connection for margin calculation
+      const stripeConnected = await checkStripeConnection();
+      
+      // Calculate metrics for each period
+      const results: OperationsPeriodMetrics[] = [];
+      
+      for (let i = 0; i < limitedPeriods.length; i++) {
+        const period = limitedPeriods[i];
+        
+        // Get Stripe metrics for this period if connected
+        let stripeMetrics: { grossVolume: number; netVolume: number } | null = null;
+        if (stripeConnected) {
+          try {
+            const startTimestamp = Math.floor(new Date(period.startUTC).getTime() / 1000);
+            const endTimestamp = Math.floor(new Date(period.endUTC).getTime() / 1000);
+            const stripePeriodMetrics = await getStripeMetricsForWeek(startTimestamp, endTimestamp);
+            stripeMetrics = {
+              grossVolume: stripePeriodMetrics.grossVolume,
+              netVolume: stripePeriodMetrics.netVolume,
+            };
+          } catch (e) {
+            console.error("Error fetching Stripe metrics for operations:", e);
+          }
+        }
+        
+        const metrics = await calculateOperationsMetrics(pool, period.startUTC, period.endUTC, stripeMetrics);
+        
+        // Get previous period metrics for variance
+        let variance: Record<string, number | null> = {};
+        if (i < limitedPeriods.length - 1) {
+          const prevPeriod = limitedPeriods[i + 1];
+          let prevStripeMetrics: { grossVolume: number; netVolume: number } | null = null;
+          if (stripeConnected) {
+            try {
+              const prevStartTimestamp = Math.floor(new Date(prevPeriod.startUTC).getTime() / 1000);
+              const prevEndTimestamp = Math.floor(new Date(prevPeriod.endUTC).getTime() / 1000);
+              const prevStripePeriodMetrics = await getStripeMetricsForWeek(prevStartTimestamp, prevEndTimestamp);
+              prevStripeMetrics = {
+                grossVolume: prevStripePeriodMetrics.grossVolume,
+                netVolume: prevStripePeriodMetrics.netVolume,
+              };
+            } catch (e) {
+              console.error("Error fetching prev Stripe metrics for operations:", e);
+            }
+          }
+          const prevMetrics = await calculateOperationsMetrics(pool, prevPeriod.startUTC, prevPeriod.endUTC, prevStripeMetrics);
+          variance = calculateOperationsVariance(metrics, prevMetrics);
+        }
+        
+        results.push({
+          periodLabel: period.label,
+          periodStart: period.startUTC,
+          periodEnd: period.endUTC,
+          periodType: periodType as "weekly" | "monthly",
+          metrics,
+          variance,
+        });
+      }
+      
+      res.json({
+        periods: results,
+        stripeConnected,
+        periodType,
+      });
+    } catch (error: any) {
+      console.error("Operations performance error:", error);
+      res.status(500).json({ error: "Failed to fetch operations metrics", message: error.message });
     }
   });
 

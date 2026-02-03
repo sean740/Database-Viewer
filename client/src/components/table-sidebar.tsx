@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Search, Table2, Loader2, EyeOff, FileText, BarChart3 } from "lucide-react";
+import { Search, Table2, Loader2, EyeOff, FileText, BarChart3, Truck } from "lucide-react";
 import { Link } from "wouter";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -47,6 +47,12 @@ export function TableSidebar({
           <Button variant="outline" className="w-full gap-2" data-testid="link-weekly-performance">
             <BarChart3 className="h-4 w-4" />
             Weekly Dashboard
+          </Button>
+        </Link>
+        <Link href="/operations-performance">
+          <Button variant="outline" className="w-full gap-2" data-testid="link-operations-performance">
+            <Truck className="h-4 w-4" />
+            Operations Dashboard
           </Button>
         </Link>
         <div className="relative">

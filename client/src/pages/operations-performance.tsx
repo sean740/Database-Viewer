@@ -296,7 +296,7 @@ export default function OperationsPerformance() {
   const { data: zonesData } = useQuery<string[]>({
     queryKey: ["/api/zones", selectedDatabase],
     queryFn: async () => {
-      const response = await fetch(`/api/zones/${selectedDatabase}`, {
+      const response = await fetch(`/api/zones/${encodeURIComponent(selectedDatabase)}`, {
         credentials: "include",
       });
       if (!response.ok) {

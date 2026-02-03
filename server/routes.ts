@@ -5052,5 +5052,175 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
     }
   });
 
+  // Zone Time-Series endpoint - shows all zones across all periods for a specific metric
+  app.get("/api/operations-performance/:database/zone-time-series", isAuthenticated, async (req, res) => {
+    try {
+      const { database } = req.params;
+      const { metricId, periodType = "weekly" } = req.query;
+      const refresh = req.query.refresh === "true";
+      const userId = (req.user as any)?.id;
+      const user = await authStorage.getUser(userId);
+      
+      if (!user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      
+      if (!metricId) {
+        return res.status(400).json({ error: "Missing required parameter: metricId" });
+      }
+      
+      // Validate metricId using the canonical OPERATIONS_METRIC_SPECS source
+      const metricSpec = getOperationsMetricSpec(metricId as string);
+      if (!metricSpec) {
+        return res.status(400).json({ error: `Invalid metricId: ${metricId}. Use a valid operations metric ID.` });
+      }
+      
+      const pool = getPool(database);
+      
+      // Check cache first (skip if refresh requested)
+      const cacheKey = `zone-time-series:${database}:${metricId}:${periodType}`;
+      if (!refresh) {
+        const cachedData = getFromCache<any>(cacheKey);
+        if (cachedData) {
+          await logAudit({
+            userId,
+            userEmail: user.email,
+            action: "VIEW_ZONE_TIME_SERIES",
+            database,
+            details: `Metric: ${metricId}, Period Type: ${periodType} (cached)`,
+            ip: req.ip || undefined,
+          });
+          return res.json({ ...cachedData, fromCache: true });
+        }
+      }
+      
+      // Generate periods (same logic as main operations-performance endpoint)
+      const periods: { startUTC: string; endUTC: string; label: string }[] = [];
+      
+      if (periodType === "monthly") {
+        // Monthly: Last 12 months
+        const now = new Date();
+        for (let i = 0; i < 12; i++) {
+          const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
+          
+          // Convert to PST (UTC-8)
+          const startDateStr = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01T08:00:00.000Z`;
+          const endDateStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-01T08:00:00.000Z`;
+          const monthLabel = monthStart.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+          
+          periods.push({ startUTC: startDateStr, endUTC: endDateStr, label: monthLabel });
+        }
+      } else {
+        // Weekly: Generate weeks from Dec 29, 2025 to current week
+        const startDate = new Date("2025-12-29T00:00:00-08:00");
+        const now = new Date();
+        let weekStart = startDate;
+        
+        while (weekStart < now) {
+          const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+          
+          const startDateStr = weekStart.toISOString().split("T")[0] + "T08:00:00.000Z";
+          const endDateStr = weekEnd.toISOString().split("T")[0] + "T08:00:00.000Z";
+          const weekLabel = `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(weekEnd.getTime() - 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+          
+          periods.push({ startUTC: startDateStr, endUTC: endDateStr, label: weekLabel });
+          
+          weekStart = weekEnd;
+        }
+      }
+      
+      // Reverse so most recent is first
+      periods.reverse();
+      
+      // Limit to last 12 periods for performance
+      const limitedPeriods = periods.slice(0, 12);
+      
+      // Get all available zones
+      const zonesResult = await pool.query(
+        `SELECT DISTINCT abbreviation FROM public.districts WHERE abbreviation IS NOT NULL ORDER BY abbreviation`
+      );
+      const allZones = zonesResult.rows.map((r: any) => r.abbreviation);
+      
+      // Calculate metrics for all zones x all periods in parallel
+      // Group by zone to make the response structure easier to work with
+      const zoneDataPromises = allZones.map(async (zone) => {
+        const periodValues: { periodLabel: string; periodStart: string; periodEnd: string; value: number }[] = [];
+        
+        // Calculate metrics for this zone across all periods in parallel
+        const metricsPromises = limitedPeriods.map(async (period) => {
+          const metrics = await calculateOperationsMetrics(pool, period.startUTC, period.endUTC, null, [zone]);
+          const value = metrics[metricId as keyof typeof metrics];
+          return {
+            periodLabel: period.label,
+            periodStart: period.startUTC,
+            periodEnd: period.endUTC,
+            value: typeof value === 'number' ? value : 0,
+          };
+        });
+        
+        const results = await Promise.all(metricsPromises);
+        periodValues.push(...results);
+        
+        return {
+          zone,
+          periods: periodValues,
+        };
+      });
+      
+      const zoneData = await Promise.all(zoneDataPromises);
+      
+      // Also calculate "All Zones" aggregate across all periods
+      const allZonesPeriodsPromises = limitedPeriods.map(async (period) => {
+        const metrics = await calculateOperationsMetrics(pool, period.startUTC, period.endUTC, null, []);
+        const value = metrics[metricId as keyof typeof metrics];
+        return {
+          periodLabel: period.label,
+          periodStart: period.startUTC,
+          periodEnd: period.endUTC,
+          value: typeof value === 'number' ? value : 0,
+        };
+      });
+      
+      const allZonesPeriods = await Promise.all(allZonesPeriodsPromises);
+      
+      // Sort zones by their most recent value (descending)
+      zoneData.sort((a, b) => {
+        const aLatest = a.periods[0]?.value || 0;
+        const bLatest = b.periods[0]?.value || 0;
+        return bLatest - aLatest;
+      });
+      
+      await logAudit({
+        userId,
+        userEmail: user.email,
+        action: "VIEW_ZONE_TIME_SERIES",
+        database,
+        details: `Metric: ${metricId}, Period Type: ${periodType}, Periods: ${limitedPeriods.length}`,
+        ip: req.ip || undefined,
+      });
+      
+      const responseData = {
+        metricId,
+        metricLabel: metricSpec.name,
+        periodType,
+        periods: limitedPeriods.map(p => ({ label: p.label, start: p.startUTC, end: p.endUTC })),
+        allZones: {
+          zone: "All Zones",
+          periods: allZonesPeriods,
+        },
+        zones: zoneData,
+      };
+      
+      // Cache for 1 hour
+      setInCache(cacheKey, responseData, 3600000);
+      
+      res.json({ ...responseData, fromCache: false });
+    } catch (err) {
+      console.error("Error in zone time-series:", err);
+      res.status(500).json({ error: "Failed to calculate zone time-series" });
+    }
+  });
+
   return httpServer;
 }

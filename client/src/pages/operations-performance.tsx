@@ -272,7 +272,7 @@ function MetricsTable({
 // All metrics combined for the metric selector
 const allMetrics: MetricConfig[] = [...networkManagementMetrics, ...supplyManagementMetrics];
 
-// Zone comparison response interface
+// Zone comparison response interface (legacy single-period)
 interface ZoneComparisonResponse {
   metricId: string;
   periodStart: string;
@@ -286,6 +286,23 @@ interface ZoneComparisonResponse {
     value: number;
     variance: number | null;
   }[];
+}
+
+// Zone time-series response interface (all periods)
+interface ZoneTimeSeriesResponse {
+  metricId: string;
+  metricLabel: string;
+  periodType: string;
+  periods: { label: string; start: string; end: string }[];
+  allZones: {
+    zone: string;
+    periods: { periodLabel: string; periodStart: string; periodEnd: string; value: number }[];
+  };
+  zones: {
+    zone: string;
+    periods: { periodLabel: string; periodStart: string; periodEnd: string; value: number }[];
+  }[];
+  fromCache?: boolean;
 }
 
 export default function OperationsPerformance() {
@@ -394,46 +411,37 @@ export default function OperationsPerformance() {
   const selectedPeriod = periods[selectedPeriodIndex];
   const previousPeriod = periods[selectedPeriodIndex + 1];
 
-  // Zone comparison query for Metric Specific view
-  // Build the full URL for the query key to match the actual endpoint path
-  const zoneComparisonUrl = selectedPeriod && selectedDatabase
-    ? `/api/operations-performance/${encodeURIComponent(selectedDatabase)}/zone-comparison`
+  // Zone time-series query for Metric Specific view - shows all periods for all zones
+  const zoneTimeSeriesUrl = selectedDatabase
+    ? `/api/operations-performance/${encodeURIComponent(selectedDatabase)}/zone-time-series`
     : null;
     
   const { 
-    data: zoneComparisonData, 
-    isLoading: zoneComparisonLoading 
-  } = useQuery<ZoneComparisonResponse>({
+    data: zoneTimeSeriesData, 
+    isLoading: zoneTimeSeriesLoading 
+  } = useQuery<ZoneTimeSeriesResponse>({
     queryKey: [
-      zoneComparisonUrl,
+      zoneTimeSeriesUrl,
       selectedMetric,
-      selectedPeriod?.periodStart,
-      selectedPeriod?.periodEnd,
-      previousPeriod?.periodStart,
-      previousPeriod?.periodEnd,
+      periodType,
     ],
     queryFn: async () => {
-      if (!selectedPeriod || !zoneComparisonUrl) return null;
+      if (!zoneTimeSeriesUrl) return null;
       const params = new URLSearchParams({
         metricId: selectedMetric,
-        periodStart: selectedPeriod.periodStart,
-        periodEnd: selectedPeriod.periodEnd,
+        periodType,
       });
-      if (previousPeriod) {
-        params.set("prevPeriodStart", previousPeriod.periodStart);
-        params.set("prevPeriodEnd", previousPeriod.periodEnd);
-      }
       const response = await fetch(
-        `${zoneComparisonUrl}?${params.toString()}`,
+        `${zoneTimeSeriesUrl}?${params.toString()}`,
         { credentials: "include" }
       );
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || "Failed to fetch zone comparison");
+        throw new Error(errorData.error || "Failed to fetch zone time-series data");
       }
       return response.json();
     },
-    enabled: !!selectedDatabase && !!selectedPeriod && viewMode === "metricSpecific",
+    enabled: !!selectedDatabase && viewMode === "metricSpecific",
   });
 
   // AI Chat mutation
@@ -846,10 +854,10 @@ export default function OperationsPerformance() {
           </div>
         )}
 
-        {/* Zone Comparison View */}
-        {selectedDatabase && !operationsLoading && periods.length > 0 && viewMode === "metricSpecific" && (
+        {/* Zone Comparison View - Time Series */}
+        {selectedDatabase && !operationsLoading && viewMode === "metricSpecific" && (
           <div className="space-y-6">
-            {/* Metric Selector and Period Info */}
+            {/* Metric Selector */}
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-lg flex items-center gap-4 flex-wrap">
@@ -879,133 +887,90 @@ export default function OperationsPerformance() {
                       ))}
                     </SelectContent>
                   </Select>
-                  {selectedPeriod && (
-                    <Badge variant="outline">
-                      {selectedPeriod.periodLabel}
-                    </Badge>
+                  {zoneTimeSeriesData?.fromCache && (
+                    <Badge variant="secondary" className="text-xs">Cached</Badge>
                   )}
                 </CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Compare {allMetrics.find(m => m.key === selectedMetric)?.label || selectedMetric} across all zones
+                  Track {allMetrics.find(m => m.key === selectedMetric)?.label || selectedMetric} across all zones over time
                 </p>
               </CardHeader>
               <CardContent>
-                {zoneComparisonLoading && (
+                {zoneTimeSeriesLoading && (
                   <div className="text-center py-8">
                     <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">Loading zone comparison...</p>
+                    <p className="text-sm text-muted-foreground">Loading zone time-series data...</p>
                   </div>
                 )}
                 
-                {!zoneComparisonLoading && zoneComparisonData && (
+                {!zoneTimeSeriesLoading && zoneTimeSeriesData && (
                   <div className="space-y-4">
-                    {/* All Zones Aggregate */}
-                    <div className="p-4 bg-muted rounded-lg border-2 border-primary/20" data-testid="zone-aggregate">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="text-sm font-medium text-muted-foreground">All Zones (Aggregate)</div>
-                          <div className="text-2xl font-bold" data-testid="zone-aggregate-value">
-                            {formatValue(
-                              zoneComparisonData.allZones.value, 
-                              allMetrics.find(m => m.key === selectedMetric)?.format || "number"
-                            )}
-                          </div>
-                        </div>
-                        {zoneComparisonData.allZones.variance !== null && (
-                          <div 
-                            className={cn(
-                              "flex items-center gap-1 text-sm font-medium",
-                              zoneComparisonData.allZones.variance > 0 ? "text-green-600" : 
-                              zoneComparisonData.allZones.variance < 0 ? "text-red-600" : "text-muted-foreground"
-                            )}
-                            data-testid="zone-aggregate-variance"
-                          >
-                            {zoneComparisonData.allZones.variance > 0 ? (
-                              <TrendingUp className="h-4 w-4" />
-                            ) : zoneComparisonData.allZones.variance < 0 ? (
-                              <TrendingDown className="h-4 w-4" />
-                            ) : null}
-                            {zoneComparisonData.allZones.variance > 0 ? "+" : ""}
-                            {zoneComparisonData.allZones.variance}%
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    
-                    {/* Zone Comparison Table */}
-                    <div className="rounded-md border">
+                    {/* Time Series Table */}
+                    <div className="rounded-md border overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead className="w-16">#</TableHead>
-                            <TableHead>Zone</TableHead>
-                            <TableHead className="text-right">Value</TableHead>
-                            <TableHead className="text-right w-32">vs Prev {periodType === "weekly" ? "Week" : "Month"}</TableHead>
+                            <TableHead className="sticky left-0 bg-background z-10 min-w-[80px]">Zone</TableHead>
+                            {zoneTimeSeriesData.periods.map((period) => (
+                              <TableHead 
+                                key={period.start} 
+                                className="text-center min-w-[100px] whitespace-nowrap"
+                              >
+                                {period.label}
+                              </TableHead>
+                            ))}
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {zoneComparisonData.zones.map((zone, index) => (
-                            <TableRow key={zone.zone} data-testid={`zone-row-${zone.zone}`}>
-                              <TableCell className="text-muted-foreground">{index + 1}</TableCell>
-                              <TableCell className="font-medium">{zone.zone}</TableCell>
-                              <TableCell className="text-right font-mono" data-testid={`zone-value-${zone.zone}`}>
+                          {/* All Zones Aggregate Row */}
+                          <TableRow className="bg-muted/50 font-medium" data-testid="zone-row-all">
+                            <TableCell className="sticky left-0 bg-muted/50 z-10 font-bold">
+                              All Zones
+                            </TableCell>
+                            {zoneTimeSeriesData.allZones.periods.map((periodData, idx) => (
+                              <TableCell 
+                                key={periodData.periodStart} 
+                                className="text-center font-mono"
+                                data-testid={`zone-value-all-${idx}`}
+                              >
                                 {formatValue(
-                                  zone.value, 
+                                  periodData.value,
                                   allMetrics.find(m => m.key === selectedMetric)?.format || "number"
                                 )}
                               </TableCell>
-                              <TableCell className="text-right">
-                                {zone.variance !== null && (
-                                  <span 
-                                    className={cn(
-                                      "inline-flex items-center gap-1 text-sm",
-                                      zone.variance > 0 ? "text-green-600" : 
-                                      zone.variance < 0 ? "text-red-600" : "text-muted-foreground"
-                                    )}
-                                    data-testid={`zone-variance-${zone.zone}`}
-                                  >
-                                    {zone.variance > 0 ? (
-                                      <TrendingUp className="h-3 w-3" />
-                                    ) : zone.variance < 0 ? (
-                                      <TrendingDown className="h-3 w-3" />
-                                    ) : null}
-                                    {zone.variance > 0 ? "+" : ""}
-                                    {zone.variance}%
-                                  </span>
-                                )}
+                            ))}
+                          </TableRow>
+                          
+                          {/* Individual Zone Rows */}
+                          {zoneTimeSeriesData.zones.map((zoneData) => (
+                            <TableRow key={zoneData.zone} data-testid={`zone-row-${zoneData.zone}`}>
+                              <TableCell className="sticky left-0 bg-background z-10 font-medium">
+                                {zoneData.zone}
                               </TableCell>
+                              {zoneData.periods.map((periodData, idx) => (
+                                <TableCell 
+                                  key={periodData.periodStart} 
+                                  className="text-center font-mono text-sm"
+                                  data-testid={`zone-value-${zoneData.zone}-${idx}`}
+                                >
+                                  {formatValue(
+                                    periodData.value,
+                                    allMetrics.find(m => m.key === selectedMetric)?.format || "number"
+                                  )}
+                                </TableCell>
+                              ))}
                             </TableRow>
                           ))}
                         </TableBody>
                       </Table>
                     </div>
+                    
+                    <p className="text-xs text-muted-foreground text-center">
+                      Showing last {zoneTimeSeriesData.periods.length} {periodType === "weekly" ? "weeks" : "months"} 
+                      {" "}across {zoneTimeSeriesData.zones.length} zones
+                    </p>
                   </div>
                 )}
-              </CardContent>
-            </Card>
-            
-            {/* Period Selector (same as overview) */}
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Calendar className="h-5 w-5" />
-                  Select {periodType === "weekly" ? "Week" : "Month"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-2">
-                  {periods.slice(0, 12).map((period, index) => (
-                    <Button
-                      key={period.periodStart}
-                      variant={selectedPeriodIndex === index ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setSelectedPeriodIndex(index)}
-                      data-testid={`period-button-${index}`}
-                    >
-                      {period.periodLabel}
-                    </Button>
-                  ))}
-                </div>
               </CardContent>
             </Card>
           </div>

@@ -1,228 +1,32 @@
 # WashOS DataScope
 
-A secure, read-only web application for viewing and browsing PostgreSQL databases with role-based access control. Designed for non-developer users to safely explore database content without risk of data modification.
-
 ## Overview
+WashOS DataScope is a secure, read-only web application designed for non-developer users to safely explore and analyze data from PostgreSQL databases. It provides role-based access control, intuitive browsing, filtering, and export capabilities. The application aims to democratize data access within WashOS, enabling various user roles (Admin, WashOS User, External Customer) to gain insights without requiring SQL knowledge, while maintaining stringent security measures to prevent data modification. Key features include natural language querying, comprehensive marketing and operations dashboards with AI assistance, and integration with Stripe for financial metrics.
 
-This application connects to one or more Postgres databases using connection strings stored in environment variables and provides a user-friendly interface for:
-- Browsing tables within selected databases
-- Viewing rows with pagination (50 rows per page)
-- Applying filters to narrow down results
-- Exporting data to CSV with role-based limits
-- Natural language queries using ChatGPT (when OpenAI integration is enabled)
-- Role-based access control (Admin, WashOS User, External Customer)
+## User Preferences
+- I prefer clear, concise explanations for technical concepts.
+- I expect the agent to prioritize security and data integrity in all proposed changes.
+- I like an iterative development approach, where features are built and tested incrementally.
+- Ask for confirmation before making significant architectural changes or adding new external dependencies.
+- Ensure all changes are thoroughly tested and do not introduce regressions.
 
-## Tech Stack
+## System Architecture
+The application is built with a React (TypeScript, TanStack Query, Shadcn UI, Tailwind CSS) frontend and a Node.js (Express, pg library) backend. It utilizes a mono-repo structure with `client/`, `server/`, and `shared/` directories. UI/UX emphasizes a clean, user-friendly interface with consistent design elements from Shadcn UI and Tailwind CSS.
 
-- **Frontend**: React with TypeScript, TanStack Query, Shadcn UI components, Tailwind CSS
-- **Backend**: Node.js + Express, pg library for PostgreSQL connections
-- **AI Integration**: OpenAI via Replit AI Integrations (for natural language queries)
+**Key Architectural Decisions:**
+-   **Read-Only Design**: All database interactions are strictly `SELECT` queries, and identifiers are validated to prevent SQL injection.
+-   **Role-Based Access Control (RBAC)**: Implemented for granular permissions across different user types (Admin, WashOS User, External Customer), controlling database visibility, export limits, and dashboard access.
+-   **Configurable Database Connections**: Supports connecting to multiple PostgreSQL databases via environment variables.
+-   **Server-Side Pagination & Filtering**: Ensures efficient data retrieval and reduces client-side load.
+-   **AI Integration**: Natural Language Queries (NLQ) and AI-powered dashboard assistance convert natural language into structured query plans. The AI has full access to tables for querying, while UI visibility is controlled by user settings.
+-   **Dashboard Architecture**: Dedicated dashboards for Marketing and Operations Performance, featuring weekly/monthly period views, zone-based filtering, variance comparison, and AI chat with drill-down capabilities.
+-   **Zone Comparison (Time-Series)**: Operations Dashboard includes a "Zone Comparison" view that displays any metric across all zones over time. Zones appear as rows with periods as columns, allowing users to track trends and compare performance across geographic regions. API endpoint: `/api/operations-performance/:database/zone-time-series`.
+-   **Dashboard Caching**: Global, server-side caching for dashboard data with varying durations (1 hour for current periods, 1 week for historical) and LRU eviction to optimize performance and reduce database load.
+-   **Multi-Column Sorting**: Supports complex sorting logic with persistent state.
+-   **Admin Filter Definitions**: Admins can define and save reusable table filters.
+-   **Audit Logging**: Comprehensive logging of all data access actions for security and compliance.
 
-## Project Structure
-
-```
-client/
-  src/
-    components/     # React components (Header, DataTable, FilterPanel, etc.)
-    pages/         # Page components (database-viewer.tsx)
-    lib/           # Utilities and types
-    hooks/         # Custom React hooks
-server/
-  routes.ts        # All API endpoints
-  storage.ts       # Filter definitions storage (reads/writes filters.json)
-  stripeClient.ts  # Stripe API client helper for financial metrics
-shared/
-  schema.ts        # Shared TypeScript types and Zod schemas
-filters.json       # Admin-configured filter definitions (per table)
-```
-
-## Environment Variables
-
-### Required
-- `DATABASE_URLS`: Either a JSON array or single connection string
-  - JSON array format: `[{"name":"Production","url":"postgres://..."},{"name":"Staging","url":"postgres://..."}]`
-  - Single connection: `postgres://user:pass@host:5432/dbname` (will be named "Default")
-
-### Optional
-- `AI_INTEGRATIONS_OPENAI_API_KEY`: For natural language queries (auto-configured by Replit AI Integrations)
-- `AI_INTEGRATIONS_OPENAI_BASE_URL`: OpenAI API base URL (auto-configured)
-- `DB_SSL_REJECT_UNAUTHORIZED`: Set to "false" to disable SSL certificate verification for self-signed certs (default: true for security)
-
-## Security Features
-
-### SSL Certificate Verification
-- Database connections verify SSL certificates by default for production security
-- Set `DB_SSL_REJECT_UNAUTHORIZED=false` only for development with self-signed certificates
-
-### Rate Limiting
-- General API: 100 requests per minute
-- Authentication endpoints: 10 requests per minute
-- Export endpoints: 10 requests per minute
-- AI/NLQ queries: 20 requests per minute
-
-### Audit Logging
-- All data access (viewing rows, exports) is logged to the database
-- Logs include: user ID, email, action, database/table, timestamp, IP address
-- Admins can view audit logs via the `/api/admin/audit-logs` endpoint
-
-### Role-Based Access Control
-- **Admin**: Full access, user management, table visibility settings, view audit logs
-- **WashOS User**: Full data access, can manage External Customer grants
-- **External Customer**: Access only to specifically granted tables
-
-### Table Visibility vs. AI Access
-- **Visibility is cosmetic for UI only**: The "isVisible" setting in table settings controls whether a table appears in the UI dropdown for manual browsing
-- **AI has full access**: The AI assistant (NLQ and My Reports) can access ALL tables regardless of visibility settings - this allows users to query any data through natural language even if it's not shown in the UI table list
-- **External customer grants are always enforced**: External customers are still restricted to their granted tables in both UI and AI contexts
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/databases` | List available database connections |
-| GET | `/api/tables/:database` | List tables for a database |
-| GET | `/api/columns/:database/:schema/:table` | Get columns for a table |
-| GET | `/api/filters/:table` | Get filter definitions for a table |
-| POST | `/api/filters` | Save filter definitions for a table |
-| POST | `/api/rows` | Fetch rows with pagination and filters |
-| GET | `/api/export` | Export current view as CSV |
-| GET | `/api/nlq/status` | Check if NLQ is enabled |
-| POST | `/api/nlq` | Process natural language query |
-| GET | `/api/weekly-performance/:database` | Get weekly performance metrics dashboard data |
-| POST | `/api/weekly-performance/:database/chat` | AI chat for Marketing dashboard |
-| GET | `/api/weekly-performance/:database/drilldown-export` | Export drilldown data as CSV |
-| GET | `/api/operations-performance/:database` | Get operations performance metrics dashboard data |
-| POST | `/api/operations-performance/:database/chat` | AI chat for Operations dashboard |
-| GET | `/api/operations-performance/:database/drilldown-export` | Export operations drilldown data as CSV |
-| GET | `/api/operations-performance/:database/zone-comparison` | Get zone-by-zone comparison for a specific metric |
-| GET | `/api/stripe-status` | Check if Stripe is connected |
-| GET | `/api/stripe-metrics` | Get Stripe financial metrics for a week |
-
-## Features
-
-### Stripe Financial Metrics Integration
-- When Stripe is connected via Replit integration, the Weekly Performance Dashboard displays additional Stripe metrics
-- Shows metrics for the selected week:
-  - **Gross Volume**: Total charges/payments collected via Stripe
-  - **Net Volume**: Amount after Stripe fees
-  - **Refunds**: Total refunds processed (with count)
-  - **Disputes**: Total disputed amount (with count)
-- **Revenue Comparison**: Compares database-calculated revenue vs Stripe gross volume to identify discrepancies
-- Only visible when Stripe is connected; gracefully hidden otherwise
-- Uses read-only API access (balance transactions and disputes)
-- Protected by authentication - only logged-in users can access Stripe data
-
-### Marketing Performance Dashboard
-- Accessible at `/weekly-performance` via sidebar button
-- Supports both weekly and monthly period views via toggle buttons in header
-- Displays 16 key business metrics per period (PST timezone):
-  - **Bookings**: Created, Due, Completed, Avg/Day, Conversion (Done/Due)
-  - **Revenue**: Avg Booking Price, Total Revenue, Gross Profit, Margin %
-  - **Users**: Sign Ups, New Users (with booking), New User Conversion
-  - **Membership**: Subscription Revenue, Member Bookings, % from Members, New Memberships
-- Shows variance compared to previous period (percentage or percentage point change)
-- Weekly view: Data from Dec 29, 2025 onward, week boundaries Monday 00:00:00 PST to next Monday 00:00:00 PST (exclusive)
-- Monthly view: Shows last 12 months, month boundaries 1st of month 00:00:00 PST
-- Handles PST/PDT timezone correctly for period boundaries
-- **Zone Filtering**: Multi-select filter to analyze metrics by geographic region
-  - Filter button shows "All Zones", "1 Zone", or "X Zones" based on selection
-  - Applies to booking-related metrics: Bookings Created/Due/Completed, Revenue, Tips, Refunds, Member Bookings
-  - Does NOT apply to user-related metrics: Sign Ups, New Users, Subscriptions
-  - Join path: bookings.address_id → addresses.id → addresses.district_id → districts.id → districts.abbreviation
-  - Available zones: AUS, BA, CHI, DA, DC, FTL, LA, LV, MIA, NOC, NSH, OC, ORL, PBC, PHX, RVC, SAC, SBC, SD, SF, SFV, SGV, SJ, SLA, SOC, TB, WLA
-- **AI Chat Assistant**: Floating chat button in bottom-right corner allows users to ask questions about their dashboard data and get AI-powered insights
-  - **Drill-down capability**: When users ask "show me the data" or similar, AI can retrieve the actual database rows that contribute to any metric
-  - **Data preview**: Shows first 10 rows inline in chat with full column data
-  - **CSV export**: Download button exports up to 10,000 rows for deeper analysis
-  - **Revenue breakdown**: Can drill into individual revenue sources (bookings, tips, subscriptions, refunds, credit packs, Stripe fees)
-  - **Role restricted**: Drill-down access limited to Admin and WashOS User roles only
-
-#### Revenue Calculation Details
-- **Total Revenue** = Booking Revenue + Subscription Fees + Customer Fees + Tips + Credit Packs - Refunds - Stripe Fees
-  - Subscription Fees: price_plan_id 11=$96, 10=$9.99, others=$0
-  - Tips: Sum of `tip_amount` from `booking_tips` where tip's `created_at` is in the week
-  - Credit Packs: Sum of `pay_amount` from `credits_packs` joined with `user_credits_transactions` (type_id=16) on `amount=get_amount`
-  - Refunds: Sum of `total` from `booking_refunds` where `created_at` is in the week
-  - Stripe Fees: Sum of `stripe_fee` from `bookings` where `date_due` is in the week and `status='done'`
-- **Gross Profit** = Booking Margin + Subscription Fees + Customer Fees + Tip Profit - Refunds
-  - Tip Profit: `tip_amount - vendor_amount` from `booking_tips`
-- **New Users (w/Booking)**: Users who signed up in the week AND have at least one booking ever (any time)
-
-### Operations Performance Dashboard
-- Accessible at `/operations-performance` via sidebar button
-- Supports both weekly and monthly period views
-- Tracks 13+ key operations metrics in two categories:
-  - **Network Management**: Bookings Completed, Emergencies, Delivery Rate, Defect %, Overbooked %, Rating, Response Rate, Margin
-  - **Supply Management**: Active Vendors, New Vendors, Dismissed Vendors, Scheduled Hours, Utilization
-- Shows variance compared to previous period (percentage or percentage point change)
-- **Zone Filtering**: Multi-select filter to analyze operations metrics by geographic region
-  - Filter button shows "All Zones", "1 Zone", or "X Zones" based on selection
-  - **Booking-based metrics** (via address → district): Bookings Completed, Delivery Rate, Defect %, Overbooked %, Rating, Response Rate
-  - **Vendor-based metrics** (via vendors.washos_zone): Emergencies, Active Vendors, New Vendors, Dismissed Vendors, Scheduled Hours, Utilization
-  - Stripe Margin is not zone-filtered (comes from Stripe API)
-- **AI Chat Assistant**: Floating chat button in bottom-right corner allows users to ask questions about operations data
-  - **Drill-down capability**: AI can retrieve the actual database rows that contribute to any metric
-  - **Data preview**: Shows first 10 rows inline in chat with full column data
-  - **CSV export**: Download button exports up to 10,000 rows for deeper analysis
-  - **Role restricted**: Drill-down access limited to Admin and WashOS User roles only
-- **Zone Comparison View**: Toggle between "Overview" and "Zone Comparison" views in the header
-  - Allows comparing any single metric across all geographic zones
-  - Metric selector dropdown to choose which metric to compare
-  - Shows "All Zones (Aggregate)" summary with value and variance
-  - Displays table of all zones sorted by value (highest first)
-  - Each zone shows current value and variance vs previous period
-  - Calculates metrics for all zones in parallel for performance
-  - Validates metric IDs to ensure only valid operations metrics can be queried
-
-### Multi-Column Sorting
-- Click column headers to sort ascending (↑) → descending (↓) → clear
-- **Shift+click** to add additional columns to the sort (multi-column sorting)
-- Sort order numbers appear next to columns when multiple are sorted
-- Sort state persists when switching tables, resets on database change
-
-### Read-Only Safety
-- Only SELECT queries are executed
-- All identifiers (schema, table, column names) are validated with strict regex
-- All values are parameterized to prevent SQL injection
-
-### Admin Filter Definitions
-- Admins can configure reusable filters per table via the Settings modal
-- Filters are stored in `filters.json`
-- Supported operators: eq, contains, gt, gte, lt, lte
-
-### Natural Language Queries
-- When OpenAI integration is enabled, users can query in plain English
-- AI converts natural language to structured query plans (not raw SQL)
-- Queries are validated against actual table/column metadata
-
-### CSV Export
-- Exports current page (50 rows) with applied filters
-- Proper CSV escaping for commas, quotes, and newlines
-
-### My Reports (AI-Powered Custom Reporting)
-- Each user has their own personalized reporting workspace at `/my-reports`
-- Users can create multiple report pages with tables, charts, and metrics
-- AI chat assistant helps users build reports by describing what they want in natural language
-- All reports are user-isolated - users can only see and modify their own reports
-- Security features:
-  - AI-generated actions are validated against database metadata and user permissions
-  - Tables/columns are verified to exist before queries are executed
-  - External customers can only access their granted tables
-  - All report queries are audited
-
-### Dashboard Caching System
-- Both Marketing and Operations dashboards implement server-side global caching
-- Cache is stored in-memory and shared across all users (reduces database load significantly)
-- **Cache durations**:
-  - Current period (week/month still in progress): 1 hour cache
-  - Historical periods: 1 week cache
-- **Refresh button**: Users can bypass cache by clicking "Refresh" button, which passes `?refresh=true` to the API
-- **Cache keys**: Include dashboard type, database name, period type, and zone filters (for both Marketing and Operations dashboards)
-- **Implementation**: `server/dashboardCache.ts` module provides caching utilities
-- **LRU Eviction**: Cache has a maximum of 100 entries; oldest accessed entries are evicted when limit is reached
-- **Expired Cleanup**: Expired entries are cleaned up on each cache write
-- Response includes `fromCache: true/false` to indicate whether data came from cache
-
-## Development
-
-The app runs with `npm run dev` which starts both the Express backend and Vite frontend dev server.
+## External Dependencies
+-   **PostgreSQL**: Primary database for all data storage and retrieval.
+-   **OpenAI**: Integrated via Replit AI Integrations for Natural Language Queries and AI chat assistance in dashboards.
+-   **Stripe**: Integrated via Replit for fetching financial metrics (Gross Volume, Net Volume, Refunds, Disputes) for the Marketing Performance Dashboard.

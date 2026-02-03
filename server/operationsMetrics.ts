@@ -80,19 +80,25 @@ export const OPERATIONS_METRIC_SPECS: Record<string, OperationsMetricSpec> = {
     id: "defectPercent",
     name: "Defect %",
     category: "Network Management",
-    formula: "COUNT(DISTINCT rescheduling_requests with vendor-related reasons) / Bookings Completed * 100",
+    formula: "(COUNT(DISTINCT rescheduling_requests with vendor-related reasons) + COUNT(cancelled bookings with cancellation_reason 4,5,6,7,8,9,17,18)) / Bookings Completed * 100",
     sourceTable: "rescheduling_requests",
     sourceTables: ["rescheduling_requests", "bookings"],
-    description: "Percentage of unique rescheduling requests with vendor_no_availabilities, vendor_emergency, vendor_no_show, or overbooking reasons",
+    description: "Percentage of defects: vendor-related rescheduling requests plus cancellations with reason codes 4,5,6,7,8,9,17,18",
     format: "percent",
     getDrilldownQuery: (periodStart, periodEnd) => ({
-      sql: `SELECT id, booking_id, reason, accepted_at
+      sql: `SELECT 'rescheduling' as defect_type, id, booking_id, reason as reason_detail, accepted_at as event_date
             FROM public.rescheduling_requests 
             WHERE accepted_at >= $1 AND accepted_at < $2
               AND reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')
-            ORDER BY accepted_at DESC`,
+            UNION ALL
+            SELECT 'cancellation' as defect_type, id, id as booking_id, cancellation_reason::text as reason_detail, date_due as event_date
+            FROM public.bookings 
+            WHERE date_due >= $1 AND date_due < $2
+              AND status = 'cancelled'
+              AND cancellation_reason IN (4,5,6,7,8,9,17,18)
+            ORDER BY event_date DESC`,
       params: [periodStart, periodEnd],
-      columns: ["id", "booking_id", "reason", "accepted_at"],
+      columns: ["defect_type", "id", "booking_id", "reason_detail", "event_date"],
     }),
   },
 
@@ -386,15 +392,27 @@ export async function calculateOperationsMetrics(
     ? ((bookingsCompleted - vendorCancellations) / bookingsCompleted) * 100 
     : 0;
 
-  // Defect %: unique rescheduling requests with vendor-related reasons
-  const defectsResult = await pool.query(
+  // Defect %: rescheduling requests with vendor-related reasons + cancellations with specific reasons
+  const reschedulingDefectsResult = await pool.query(
     `SELECT COUNT(DISTINCT id) as count FROM public.rescheduling_requests 
      WHERE accepted_at >= $1 AND accepted_at < $2
        AND reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')`,
     [periodStart, periodEnd]
   );
-  const defects = parseInt(defectsResult.rows[0]?.count || "0");
-  const defectPercent = bookingsCompleted > 0 ? (defects / bookingsCompleted) * 100 : 0;
+  const reschedulingDefects = parseInt(reschedulingDefectsResult.rows[0]?.count || "0");
+  
+  // Cancellations with reason codes 4,5,6,7,8,9,17,18
+  const cancellationDefectsResult = await pool.query(
+    `SELECT COUNT(*) as count FROM public.bookings 
+     WHERE date_due >= $1 AND date_due < $2
+       AND status = 'cancelled'
+       AND cancellation_reason IN (4,5,6,7,8,9,17,18)`,
+    [periodStart, periodEnd]
+  );
+  const cancellationDefects = parseInt(cancellationDefectsResult.rows[0]?.count || "0");
+  
+  const totalDefects = reschedulingDefects + cancellationDefects;
+  const defectPercent = bookingsCompleted > 0 ? (totalDefects / bookingsCompleted) * 100 : 0;
 
   // Overbooked %
   const overbookedResult = await pool.query(

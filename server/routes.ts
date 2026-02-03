@@ -4390,8 +4390,11 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
         }
       }
       
-      // Reverse to show most recent first
-      periods.reverse();
+      // For weekly: reverse to show most recent first (weeks are built oldest to newest)
+      // For monthly: already built most recent first, no reverse needed
+      if (periodType === "weekly") {
+        periods.reverse();
+      }
       
       // Limit to 52 weeks or 12 months
       const limitedPeriods = periods.slice(0, periodType === "monthly" ? 12 : 52);

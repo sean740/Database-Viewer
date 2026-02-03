@@ -86,9 +86,9 @@ export const OPERATIONS_METRIC_SPECS: Record<string, OperationsMetricSpec> = {
     description: "Percentage of defects: vendor-related rescheduling requests plus cancellations with reason codes 4,5,6,7,8,9,17,18",
     format: "percent",
     getDrilldownQuery: (periodStart, periodEnd) => ({
-      sql: `SELECT 'rescheduling' as defect_type, rr.id, rr.booking_id, rr.reason as reason_detail, rr.accepted_at as event_date
+      sql: `SELECT 'rescheduling' as defect_type, rr.id, rr.booking_id, rr.reason as reason_detail, rr.requested_at as event_date
             FROM public.rescheduling_requests rr
-            WHERE rr.accepted_at >= $1 AND rr.accepted_at < $2
+            WHERE rr.requested_at >= $1 AND rr.requested_at < $2
               AND rr.reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')
             UNION ALL
             SELECT 'cancellation' as defect_type, cb.id, cb.booking_id, cb.cancel_reason_id::text as reason_detail, b.date_due as event_date
@@ -395,7 +395,7 @@ export async function calculateOperationsMetrics(
   // Defect %: rescheduling requests with vendor-related reasons + cancellations with specific reasons
   const reschedulingDefectsResult = await pool.query(
     `SELECT COUNT(DISTINCT id) as count FROM public.rescheduling_requests 
-     WHERE accepted_at >= $1 AND accepted_at < $2
+     WHERE requested_at >= $1 AND requested_at < $2
        AND reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')`,
     [periodStart, periodEnd]
   );

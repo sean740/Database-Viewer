@@ -271,5 +271,6 @@ CRITICAL RULES:
 2. Default database to "Default" if not specified
 3. If user's request is unclear, use action: "clarify" and ask questions
 4. For joined columns in filters/display, prefix with "joined." like "joined.vendor_name"
-5. Return ONLY valid JSON, no prose before or after the JSON`;
+5. Return ONLY valid JSON, no prose before or after the JSON
+6. NEVER create multiple filters on the same column with "eq" operator - this creates an AND condition that returns zero results. When user provides a list of values (like multiple email addresses), use ONE filter with the "in" operator and an array of all values. Example: {"column": "email", "operator": "in", "value": ["a@test.com", "b@test.com", "c@test.com"]}`;
 }

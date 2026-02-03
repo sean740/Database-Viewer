@@ -420,46 +420,27 @@ export default function OperationsPerformance() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background flex flex-col">
       <Header />
       
-      <div className="container mx-auto py-6 px-4 max-w-[1600px]">
-        <div className="mb-6">
-          <div className="flex items-center gap-4 mb-4">
-            <Link href="/">
-              <Button variant="ghost" size="sm" data-testid="button-back">
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back
-              </Button>
-            </Link>
-            <h1 className="text-2xl font-bold">Operations Performance Dashboard</h1>
-          </div>
-          
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Database:</span>
-              <Select
-                value={selectedDatabase}
-                onValueChange={(value) => {
-                  setSelectedDatabase(value);
-                  setSelectedPeriodIndex(0);
-                }}
-              >
-                <SelectTrigger className="w-[200px]" data-testid="select-database">
-                  <SelectValue placeholder="Select database" />
-                </SelectTrigger>
-                <SelectContent>
-                  {databases?.map((db) => (
-                    <SelectItem key={db.name} value={db.name}>
-                      {db.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+      <div className="flex-1 overflow-hidden flex flex-col">
+        <div className="border-b bg-card px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <Link href="/">
+                <Button variant="ghost" size="sm" className="gap-2" data-testid="button-back">
+                  <ArrowLeft className="h-4 w-4" />
+                  Back
+                </Button>
+              </Link>
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight">Operations Performance Dashboard</h1>
+                <p className="text-sm text-muted-foreground">
+                  Track key operations metrics {periodType === "weekly" ? "week over week" : "month over month"}
+                </p>
+              </div>
             </div>
-
             <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">View:</span>
               <Select
                 value={periodType}
                 onValueChange={(value: "weekly" | "monthly") => {
@@ -475,14 +456,13 @@ export default function OperationsPerformance() {
                   <SelectItem value="monthly">Monthly</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
 
-            {selectedDatabase && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleRefresh}
-                disabled={isFetching}
+                disabled={isFetching || !selectedDatabase}
+                className="gap-2"
                 data-testid="button-refresh"
               >
                 {isFetching ? (
@@ -490,11 +470,14 @@ export default function OperationsPerformance() {
                 ) : (
                   <RefreshCw className="h-4 w-4" />
                 )}
-                <span className="ml-2">Refresh</span>
+                Refresh
               </Button>
-            )}
+            </div>
           </div>
         </div>
+        
+        <div className="flex-1 overflow-auto">
+          <div className="container mx-auto py-6 px-4 max-w-[1600px]">
 
         {!selectedDatabase && (
           <Card>
@@ -652,7 +635,8 @@ export default function OperationsPerformance() {
             </CardContent>
           </Card>
         )}
-      </div>
+          </div>
+        </div>
 
       {/* Floating Chat Button */}
       {!isChatOpen && selectedDatabase && (
@@ -875,6 +859,7 @@ export default function OperationsPerformance() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

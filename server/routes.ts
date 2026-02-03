@@ -3240,7 +3240,8 @@ For chart blocks, config should have: database, table, chartType, xColumn (the d
 For metric blocks, config should have: database, table, column, aggregateFunction, filters, label, format
 
 FILTER OPERATORS - ONLY USE THESE EXACT VALUES (no others allowed):
-- "eq" for equals (use this for exact matches, NOT "=" or "==" or "in")
+- "eq" for equals (use this for exact matches of a SINGLE value)
+- "in" for matching ANY of multiple values (use this when user provides a LIST of values like multiple email addresses, IDs, or names)
 - "contains" for text contains/partial match
 - "gt" for greater than
 - "gte" for greater than or equal
@@ -3248,7 +3249,10 @@ FILTER OPERATORS - ONLY USE THESE EXACT VALUES (no others allowed):
 - "lte" for less than or equal
 - "between" for date ranges (value must be array of two dates like ["2025-01-01", "2025-12-31"])
 
-IMPORTANT: Do NOT use "in", "like", "!=", or any other operators. For matching one of multiple values, use multiple filters with "eq" operator or use "contains" for partial matching.
+⚠️ CRITICAL - LIST FILTERING: When a user provides a LIST of values (multiple emails, IDs, names, etc.), you MUST use ONE filter with the "in" operator and an array of ALL values.
+CORRECT: {"column": "email", "operator": "in", "value": ["a@test.com", "b@test.com", "c@test.com"]}
+WRONG: Multiple filters with "eq" on the same column - this creates AND logic and returns ZERO results!
+IMPORTANT: Do NOT use "like", "!=", or any other operators not listed above.
 
 CRITICAL DATE RANGE COMPARISONS: When the user asks to compare TWO different date ranges (e.g., "Jan 5-11 vs Jan 12-18"), you MUST create TWO SEPARATE blocks - one for each date range. This is because all filters are combined with AND logic, so putting two "between" filters on the same column in one block will return zero results (a date cannot be in two non-overlapping ranges simultaneously). For comparisons, create separate blocks like:
 - Block 1: "Bookings: Jan 5-11, 2026" with filter between ["2026-01-05", "2026-01-11"]

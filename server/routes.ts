@@ -2762,7 +2762,7 @@ export async function registerRoutes(
         const offset = (safePage - 1) * REPORT_BLOCK_PAGE_SIZE;
         
         // Add order by (handle join columns with dots)
-        if (tableConfig.orderBy) {
+        if (tableConfig.orderBy && typeof tableConfig.orderBy === 'object' && !Array.isArray(tableConfig.orderBy) && tableConfig.orderBy.column) {
           let orderColumnRef: string;
           if (tableConfig.orderBy.column.includes(".")) {
             const [prefix, colName] = tableConfig.orderBy.column.split(".");

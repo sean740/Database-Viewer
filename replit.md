@@ -153,6 +153,11 @@ filters.json       # Admin-configured filter definitions (per table)
   - **Network Management**: Bookings Completed, Emergencies, Delivery Rate, Defect %, Overbooked %, Rating, Response Rate, Margin
   - **Supply Management**: Active Vendors, New Vendors, Dismissed Vendors, Scheduled Hours, Utilization
 - Shows variance compared to previous period (percentage or percentage point change)
+- **Zone Filtering**: Multi-select filter to analyze operations metrics by geographic region
+  - Filter button shows "All Zones", "1 Zone", or "X Zones" based on selection
+  - **Booking-based metrics** (via address → district): Bookings Completed, Delivery Rate, Defect %, Overbooked %, Rating, Response Rate
+  - **Vendor-based metrics** (via vendors.washos_zone): Emergencies, Active Vendors, New Vendors, Dismissed Vendors, Scheduled Hours, Utilization
+  - Stripe Margin is not zone-filtered (comes from Stripe API)
 - **AI Chat Assistant**: Floating chat button in bottom-right corner allows users to ask questions about operations data
   - **Drill-down capability**: AI can retrieve the actual database rows that contribute to any metric
   - **Data preview**: Shows first 10 rows inline in chat with full column data
@@ -202,7 +207,7 @@ filters.json       # Admin-configured filter definitions (per table)
   - Current period (week/month still in progress): 1 hour cache
   - Historical periods: 1 week cache
 - **Refresh button**: Users can bypass cache by clicking "Refresh" button, which passes `?refresh=true` to the API
-- **Cache keys**: Include dashboard type, database name, period type, and zone filters (for Marketing dashboard)
+- **Cache keys**: Include dashboard type, database name, period type, and zone filters (for both Marketing and Operations dashboards)
 - **Implementation**: `server/dashboardCache.ts` module provides caching utilities
 - **LRU Eviction**: Cache has a maximum of 100 entries; oldest accessed entries are evicted when limit is reached
 - **Expired Cleanup**: Expired entries are cleaned up on each cache write

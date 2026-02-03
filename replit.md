@@ -89,6 +89,11 @@ filters.json       # Admin-configured filter definitions (per table)
 | GET | `/api/nlq/status` | Check if NLQ is enabled |
 | POST | `/api/nlq` | Process natural language query |
 | GET | `/api/weekly-performance/:database` | Get weekly performance metrics dashboard data |
+| POST | `/api/weekly-performance/:database/chat` | AI chat for Marketing dashboard |
+| GET | `/api/weekly-performance/:database/drilldown-export` | Export drilldown data as CSV |
+| GET | `/api/operations-performance/:database` | Get operations performance metrics dashboard data |
+| POST | `/api/operations-performance/:database/chat` | AI chat for Operations dashboard |
+| GET | `/api/operations-performance/:database/drilldown-export` | Export operations drilldown data as CSV |
 | GET | `/api/stripe-status` | Check if Stripe is connected |
 | GET | `/api/stripe-metrics` | Get Stripe financial metrics for a week |
 
@@ -140,6 +145,19 @@ filters.json       # Admin-configured filter definitions (per table)
 - **Gross Profit** = Booking Margin + Subscription Fees + Customer Fees + Tip Profit - Refunds
   - Tip Profit: `tip_amount - vendor_amount` from `booking_tips`
 - **New Users (w/Booking)**: Users who signed up in the week AND have at least one booking ever (any time)
+
+### Operations Performance Dashboard
+- Accessible at `/operations-performance` via sidebar button
+- Supports both weekly and monthly period views
+- Tracks 13+ key operations metrics in two categories:
+  - **Network Management**: Bookings Completed, Emergencies, Delivery Rate, Defect %, Overbooked %, Rating, Response Rate, Margin
+  - **Supply Management**: Active Vendors, New Vendors, Dismissed Vendors, Scheduled Hours, Utilization
+- Shows variance compared to previous period (percentage or percentage point change)
+- **AI Chat Assistant**: Floating chat button in bottom-right corner allows users to ask questions about operations data
+  - **Drill-down capability**: AI can retrieve the actual database rows that contribute to any metric
+  - **Data preview**: Shows first 10 rows inline in chat with full column data
+  - **CSV export**: Download button exports up to 10,000 rows for deeper analysis
+  - **Role restricted**: Drill-down access limited to Admin and WashOS User roles only
 
 ### Multi-Column Sorting
 - Click column headers to sort ascending (↑) → descending (↓) → clear

@@ -40,10 +40,10 @@ export const OPERATIONS_METRIC_SPECS: Record<string, OperationsMetricSpec> = {
     id: "emergencies",
     name: "Emergencies",
     category: "Network Management",
-    formula: "COUNT(*) FROM vendor_emergencies WHERE bookings_count > 0 AND created_at >= [period_start] AND created_at < [period_end]",
+    formula: "(COUNT(*) FROM vendor_emergencies WHERE bookings_count > 0) / Bookings Completed * 100",
     sourceTable: "vendor_emergencies",
-    description: "Count of vendor emergencies with bookings_count greater than 0 during the period",
-    format: "number",
+    description: "Percentage of vendor emergencies (with bookings_count > 0) relative to bookings completed during the period",
+    format: "percent",
     getDrilldownQuery: (periodStart, periodEnd) => ({
       sql: `SELECT id, vendor_id, bookings_count, created_at, updated_at
             FROM public.vendor_emergencies 
@@ -375,13 +375,14 @@ export async function calculateOperationsMetrics(
   );
   const bookingsCreated = parseInt(bookingsCreatedResult.rows[0]?.count || "0");
 
-  // Emergencies (with bookings_count > 0)
+  // Emergencies % (with bookings_count > 0) as percentage of bookings completed
   const emergenciesResult = await pool.query(
     `SELECT COUNT(*) as count FROM public.vendor_emergencies 
      WHERE bookings_count > 0 AND created_at >= $1 AND created_at < $2`,
     [periodStart, periodEnd]
   );
-  const emergencies = parseInt(emergenciesResult.rows[0]?.count || "0");
+  const emergenciesCount = parseInt(emergenciesResult.rows[0]?.count || "0");
+  const emergencies = bookingsCompleted > 0 ? (emergenciesCount / bookingsCompleted) * 100 : 0;
 
   // Delivery Rate: cancelled for vendor reasons vs completed
   const cancellationsResult = await pool.query(

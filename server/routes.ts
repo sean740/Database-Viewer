@@ -221,6 +221,13 @@ function getOperatorSQL(
         sql: `BETWEEN $${paramIndex} AND $${paramIndex + 1}`,
         paramCount: 2,
       };
+    case "in":
+      // "in" operator is handled specially - this is a placeholder
+      // The actual SQL will be generated dynamically based on array length
+      return {
+        sql: `= ANY($${paramIndex})`,
+        paramCount: 1,
+      };
     default:
       throw new Error(`Invalid operator: ${operator}`);
   }
@@ -241,6 +248,9 @@ function addFilterToQuery(
     const startValue = convertPSTDateToUTC(f.value[0], false);
     const endValue = convertPSTDateToUTC(f.value[1], true);
     params.push(startValue, endValue);
+  } else if (f.operator === "in" && Array.isArray(f.value)) {
+    // For "in", pass the array as a single parameter (PostgreSQL ANY($1))
+    params.push(f.value);
   } else if (["gt", "gte", "lt", "lte", "eq"].includes(f.operator) && typeof f.value === "string") {
     // Check if this looks like a date filter
     const dateMatch = f.value.match(/^\d{4}-\d{2}-\d{2}$/);
@@ -270,6 +280,9 @@ function addFilterToQueryWithAlias(
     const startValue = convertPSTDateToUTC(f.value[0], false);
     const endValue = convertPSTDateToUTC(f.value[1], true);
     params.push(startValue, endValue);
+  } else if (f.operator === "in" && Array.isArray(f.value)) {
+    // For "in", pass the array as a single parameter (PostgreSQL ANY($1))
+    params.push(f.value);
   } else if (["gt", "gte", "lt", "lte", "eq"].includes(f.operator) && typeof f.value === "string") {
     // Check if this looks like a date filter
     const dateMatch = f.value.match(/^\d{4}-\d{2}-\d{2}$/);
@@ -724,7 +737,7 @@ async function validateBlockConfig(
         }
       }
       // Validate operator
-      const validOps = ["eq", "contains", "gt", "gte", "lt", "lte", "between"];
+      const validOps = ["eq", "contains", "gt", "gte", "lt", "lte", "between", "in"];
       if (!validOps.includes(f.operator)) {
         return { valid: false, error: `Invalid filter operator: ${f.operator}` };
       }
@@ -2978,6 +2991,9 @@ export async function registerRoutes(
             } else if (f.operator === "between" && Array.isArray(f.value) && f.value.length === 2) {
               whereClauses.push(`${filterCol} >= $${paramIndex} AND ${filterCol} <= $${paramIndex + 1}`);
               params.push(f.value[0], f.value[1]);
+            } else if (f.operator === "in" && Array.isArray(f.value)) {
+              whereClauses.push(`${filterCol} = ANY($${paramIndex})`);
+              params.push(f.value);
             }
           });
           query += ` WHERE ${whereClauses.join(" AND ")}`;

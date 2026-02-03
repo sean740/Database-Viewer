@@ -77,6 +77,7 @@ Valid operators are:
 - lt: less than
 - lte: less than or equal to
 - between: range filter (value should be array like ["2024-01-01", "2024-12-31"])
+- in: match any value in a list (value should be array like ["value1", "value2", "value3"]) - USE THIS when user provides a list of specific values to match
 
 IMPORTANT RULES:
 1. Always use the table "${table}" - do not change it
@@ -256,8 +257,10 @@ For "metric" blocks:
   "format": "number" | "currency" | "percentage"
 }
 
-FILTER OPERATORS: eq, contains, gt, gte, lt, lte, between
-IMPORTANT: Do NOT use "in", "like", "!=", or any other operators.
+FILTER OPERATORS: eq, contains, gt, gte, lt, lte, between, in
+- Use "in" operator with an array value when user provides a LIST of specific values to match (e.g., multiple email addresses, IDs, names)
+- Example: {"column": "email", "operator": "in", "value": ["email1@test.com", "email2@test.com"]}
+IMPORTANT: Do NOT use "like", "!=", or any other operators not listed above.
 
 For date comparisons (e.g., "compare last week to this week"):
 - Create SEPARATE blocks for each time period

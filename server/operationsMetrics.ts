@@ -195,21 +195,15 @@ export const OPERATIONS_METRIC_SPECS: Record<string, OperationsMetricSpec> = {
     id: "vendorLevelCounts",
     name: "Vendor Level Counts",
     category: "Supply Management",
-    formula: "GROUP BY vendor_level_id for active vendors during the period",
+    formula: "Not available (vendor_levels table does not exist)",
     sourceTable: "vendors",
-    sourceTables: ["vendors", "vendor_levels", "bookings"],
-    description: "Count of active vendors at each dispatch level during the period",
+    sourceTables: ["vendors"],
+    description: "Count of active vendors at each dispatch level during the period (currently unavailable)",
     format: "number",
-    getDrilldownQuery: (periodStart, periodEnd) => ({
-      sql: `SELECT vl.id as level_id, vl.name as level_name, COUNT(DISTINCT v.id) as vendor_count
-            FROM public.vendor_levels vl
-            LEFT JOIN public.vendors v ON v.vendor_level_id = vl.id
-            LEFT JOIN public.bookings b ON b.vendor_id = v.id AND b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
-            WHERE b.id IS NOT NULL
-            GROUP BY vl.id, vl.name
-            ORDER BY vl.id`,
-      params: [periodStart, periodEnd],
-      columns: ["level_id", "level_name", "vendor_count"],
+    getDrilldownQuery: () => ({
+      sql: `SELECT 'No data' as info`,
+      params: [],
+      columns: ["info"],
     }),
   },
 
@@ -443,21 +437,9 @@ export async function calculateOperationsMetrics(
   );
   const activeVendors = parseInt(activeVendorsResult.rows[0]?.count || "0");
 
-  // Vendor Level Counts
-  const vendorLevelCountsResult = await pool.query(
-    `SELECT vl.name as level_name, COUNT(DISTINCT v.id) as vendor_count
-     FROM public.vendor_levels vl
-     LEFT JOIN public.vendors v ON v.vendor_level_id = vl.id
-     LEFT JOIN public.bookings b ON b.vendor_id = v.id AND b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
-     WHERE b.id IS NOT NULL
-     GROUP BY vl.id, vl.name
-     ORDER BY vl.id`,
-    [periodStart, periodEnd]
-  );
+  // Vendor Level Counts - simplified (vendor_levels table doesn't exist)
+  // Just return an empty object for now since the table doesn't exist
   const vendorLevelCounts: Record<string, number> = {};
-  for (const row of vendorLevelCountsResult.rows) {
-    vendorLevelCounts[row.level_name || `Level ${row.level_id}`] = parseInt(row.vendor_count || "0");
-  }
 
   // New Vendors (activated during period with at least 1 booking ever)
   const newVendorsResult = await pool.query(

@@ -42,8 +42,8 @@ interface DrilldownData {
   totalCount: number;
   previewCount: number;
   hasMore: boolean;
-  weekStart: string;
-  weekEnd: string;
+  periodStart: string;
+  periodEnd: string;
 }
 
 interface ChatMessage {
@@ -73,16 +73,17 @@ interface WeekMetrics {
   newSubscriptions: number;
 }
 
-interface WeekData {
-  weekLabel: string;
-  weekStart: string;
-  weekEnd: string;
+interface PeriodData {
+  periodLabel: string;
+  periodStart: string;
+  periodEnd: string;
   metrics: WeekMetrics;
   variance: WeekMetrics | null;
 }
 
 interface WeeklyPerformanceResponse {
-  weeks: WeekData[];
+  periods: PeriodData[];
+  periodType: "weekly" | "monthly";
   generatedAt: string;
   selectedZones?: string[] | null;
 }
@@ -191,7 +192,8 @@ function CategoryIcon({ category }: { category: string }) {
 
 export default function WeeklyPerformance() {
   const [selectedDatabase, setSelectedDatabase] = useState<string>("");
-  const [selectedWeekIndex, setSelectedWeekIndex] = useState<number>(0);
+  const [periodType, setPeriodType] = useState<"weekly" | "monthly">("weekly");
+  const [selectedPeriodIndex, setSelectedPeriodIndex] = useState<number>(0);
   const [selectedZones, setSelectedZones] = useState<string[]>([]);
   const [zonesPopoverOpen, setZonesPopoverOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -229,14 +231,24 @@ export default function WeeklyPerformance() {
     }
   }, [databases, selectedDatabase]);
   
-  // Reset selected week and zones when database changes
+  // Reset selected period and zones when database changes
   useEffect(() => {
-    setSelectedWeekIndex(0);
+    setSelectedPeriodIndex(0);
     setSelectedZones([]);
   }, [selectedDatabase]);
   
-  // Build query string for zones filter
-  const zonesQueryParam = selectedZones.length > 0 ? `?zones=${selectedZones.join(",")}` : "";
+  // Reset selected period when period type changes
+  useEffect(() => {
+    setSelectedPeriodIndex(0);
+  }, [periodType]);
+  
+  // Build query string for filters
+  const queryParams = new URLSearchParams();
+  queryParams.set("periodType", periodType);
+  if (selectedZones.length > 0) {
+    queryParams.set("zones", selectedZones.join(","));
+  }
+  const queryString = `?${queryParams.toString()}`;
   
   const { 
     data: performanceData, 
@@ -244,14 +256,14 @@ export default function WeeklyPerformance() {
     refetch,
     isRefetching 
   } = useQuery<WeeklyPerformanceResponse>({
-    queryKey: ["/api/weekly-performance", selectedDatabase, selectedZones.join(",")],
+    queryKey: ["/api/weekly-performance", selectedDatabase, periodType, selectedZones.join(",")],
     queryFn: async () => {
-      const refreshParam = forceRefreshRef.current ? (zonesQueryParam ? "&refresh=true" : "?refresh=true") : "";
-      const response = await fetch(`/api/weekly-performance/${selectedDatabase}${zonesQueryParam}${refreshParam}`, {
+      const refreshParam = forceRefreshRef.current ? "&refresh=true" : "";
+      const response = await fetch(`/api/weekly-performance/${encodeURIComponent(selectedDatabase)}${queryString}${refreshParam}`, {
         credentials: "include",
       });
       if (!response.ok) {
-        throw new Error("Failed to fetch weekly performance data");
+        throw new Error("Failed to fetch performance data");
       }
       const data = await response.json();
       forceRefreshRef.current = false;
@@ -283,10 +295,10 @@ export default function WeeklyPerformance() {
   };
   
   const isLoading = databasesLoading || dataLoading;
-  const weeks = performanceData?.weeks || [];
+  const periods = performanceData?.periods || [];
   
-  // Get the selected week
-  const selectedWeek = weeks[selectedWeekIndex];
+  // Get the selected period
+  const selectedPeriod = periods[selectedPeriodIndex];
   
   // Fetch Stripe status
   const { data: stripeStatus } = useQuery<{ connected: boolean }>({
@@ -302,18 +314,18 @@ export default function WeeklyPerformance() {
     },
   });
   
-  // Fetch Stripe metrics for the selected week
+  // Fetch Stripe metrics for the selected period
   const { 
     data: stripeMetricsData, 
     isLoading: stripeMetricsLoading,
     error: stripeMetricsError 
   } = useQuery<StripeMetricsResponse>({
-    queryKey: ["/api/stripe-metrics", selectedWeek?.weekStart, selectedWeek?.weekEnd],
+    queryKey: ["/api/stripe-metrics", selectedPeriod?.periodStart, selectedPeriod?.periodEnd],
     queryFn: async () => {
-      if (!selectedWeek) throw new Error("No week selected");
+      if (!selectedPeriod) throw new Error("No period selected");
       const params = new URLSearchParams({
-        weekStart: selectedWeek.weekStart,
-        weekEnd: selectedWeek.weekEnd,
+        weekStart: selectedPeriod.periodStart,
+        weekEnd: selectedPeriod.periodEnd,
       });
       const response = await fetch(`/api/stripe-metrics?${params}`, {
         credentials: "include",
@@ -324,18 +336,18 @@ export default function WeeklyPerformance() {
       }
       return response.json();
     },
-    enabled: !!selectedWeek && stripeStatus?.connected === true,
+    enabled: !!selectedPeriod && stripeStatus?.connected === true,
     retry: false,
   });
   
-  // Get the comparison week (one after selected)
-  const comparisonWeek = weeks[selectedWeekIndex + 1];
+  // Get the comparison period (one after selected)
+  const comparisonPeriod = periods[selectedPeriodIndex + 1];
   
   // Group metrics by category
   const categories = ["Bookings", "Revenue", "Users", "Membership"];
   
-  // Get the currently selected week data
-  const selectedWeekData = performanceData?.weeks?.[selectedWeekIndex];
+  // Get the currently selected period data
+  const selectedPeriodData = performanceData?.periods?.[selectedPeriodIndex];
   
   // AI Chat mutation
   const chatMutation = useMutation({
@@ -343,11 +355,12 @@ export default function WeeklyPerformance() {
       const response = await apiRequest("POST", `/api/weekly-performance/${selectedDatabase}/chat`, {
         message,
         dashboardData: performanceData,
-        selectedWeek: selectedWeekData ? {
-          weekLabel: selectedWeekData.weekLabel,
-          weekStart: selectedWeekData.weekStart,
-          weekEnd: selectedWeekData.weekEnd,
+        selectedWeek: selectedPeriodData ? {
+          periodLabel: selectedPeriodData.periodLabel,
+          periodStart: selectedPeriodData.periodStart,
+          periodEnd: selectedPeriodData.periodEnd,
         } : undefined,
+        periodType,
       });
       return response.json();
     },
@@ -376,8 +389,8 @@ export default function WeeklyPerformance() {
   const handleExportCSV = (drilldown: DrilldownData) => {
     const params = new URLSearchParams({
       metricId: drilldown.metricId,
-      weekStart: drilldown.weekStart,
-      weekEnd: drilldown.weekEnd,
+      weekStart: drilldown.periodStart,
+      weekEnd: drilldown.periodEnd,
     });
     if (drilldown.subSourceId) {
       params.set("subSourceId", drilldown.subSourceId);
@@ -430,11 +443,32 @@ export default function WeeklyPerformance() {
               <div>
                 <h1 className="text-2xl font-bold tracking-tight">Marketing Performance Dashboard</h1>
                 <p className="text-sm text-muted-foreground">
-                  Track key metrics week over week (Monday - Sunday, PST)
+                  Track key metrics {periodType === "monthly" ? "month over month" : "week over week"} (PST)
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {/* Period Type Toggle */}
+              <div className="flex rounded-md border bg-muted p-0.5" data-testid="toggle-period-type">
+                <Button
+                  variant={periodType === "weekly" ? "secondary" : "ghost"}
+                  size="sm"
+                  className="h-7 px-3 text-xs"
+                  onClick={() => setPeriodType("weekly")}
+                  data-testid="button-period-weekly"
+                >
+                  Weekly
+                </Button>
+                <Button
+                  variant={periodType === "monthly" ? "secondary" : "ghost"}
+                  size="sm"
+                  className="h-7 px-3 text-xs"
+                  onClick={() => setPeriodType("monthly")}
+                  data-testid="button-period-monthly"
+                >
+                  Monthly
+                </Button>
+              </div>
               {/* Zone Filter */}
               {availableZones.length > 0 && (
                 <Popover open={zonesPopoverOpen} onOpenChange={setZonesPopoverOpen}>
@@ -533,19 +567,19 @@ export default function WeeklyPerformance() {
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
             Select a database to view performance data
           </div>
-        ) : weeks.length === 0 ? (
+        ) : periods.length === 0 ? (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
             No performance data available
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto">
             <div className="p-6 space-y-6">
-              {selectedWeek && (
+              {selectedPeriod && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-3">
                       <h2 className="text-lg font-semibold">
-                        {selectedWeekIndex === 0 ? "Current Week" : "Selected Week"}: {selectedWeek.weekLabel}
+                        {selectedPeriodIndex === 0 ? (periodType === "monthly" ? "Current Month" : "Current Week") : (periodType === "monthly" ? "Selected Month" : "Selected Week")}: {selectedPeriod.periodLabel}
                       </h2>
                       {selectedZones.length > 0 && selectedZones.length < availableZones.length && (
                         <Badge variant="outline" className="gap-1 text-xs" data-testid="badge-zone-filter">
@@ -556,9 +590,9 @@ export default function WeeklyPerformance() {
                         </Badge>
                       )}
                     </div>
-                    {selectedWeek.variance && comparisonWeek && (
+                    {selectedPeriod.variance && comparisonPeriod && (
                       <p className="text-sm text-muted-foreground">
-                        Compared to previous week ({comparisonWeek.weekLabel})
+                        Compared to previous {periodType === "monthly" ? "month" : "week"} ({comparisonPeriod.periodLabel})
                       </p>
                     )}
                   </div>
@@ -580,11 +614,11 @@ export default function WeeklyPerformance() {
                                 <span className="text-xs text-muted-foreground">{metric.label}</span>
                                 <div className="flex items-center gap-2">
                                   <span className="text-sm font-medium">
-                                    {formatValue(selectedWeek.metrics[metric.key], metric.format)}
+                                    {formatValue(selectedPeriod.metrics[metric.key], metric.format)}
                                   </span>
-                                  {selectedWeek.variance && (
+                                  {selectedPeriod.variance && (
                                     <VarianceBadge 
-                                      value={selectedWeek.variance[metric.key]} 
+                                      value={selectedPeriod.variance[metric.key]} 
                                       isPercentPoint={metric.isPercentPoint}
                                     />
                                   )}
@@ -658,13 +692,13 @@ export default function WeeklyPerformance() {
                         )}
                         
                         {/* Revenue Comparison */}
-                        {stripeMetricsData?.metrics && selectedWeek && (
+                        {stripeMetricsData?.metrics && selectedPeriod && (
                           <div className="mt-4 pt-4 border-t" data-testid="container-revenue-comparison">
                             <h4 className="text-xs font-medium text-muted-foreground mb-2">Revenue Comparison</h4>
                             <div className="grid grid-cols-3 gap-4 text-sm">
                               <div data-testid="metric-db-revenue">
                                 <span className="text-xs text-muted-foreground">Database Revenue</span>
-                                <p className="font-medium">{formatValue(selectedWeek.metrics.totalRevenue, "currency")}</p>
+                                <p className="font-medium">{formatValue(selectedPeriod.metrics.totalRevenue, "currency")}</p>
                               </div>
                               <div data-testid="metric-stripe-gross">
                                 <span className="text-xs text-muted-foreground">Stripe Gross</span>
@@ -674,13 +708,13 @@ export default function WeeklyPerformance() {
                                 <span className="text-xs text-muted-foreground">Difference</span>
                                 <p className={cn(
                                   "font-medium",
-                                  (stripeMetricsData.metrics.grossVolume - selectedWeek.metrics.totalRevenue) > 0 
+                                  (stripeMetricsData.metrics.grossVolume - selectedPeriod.metrics.totalRevenue) > 0 
                                     ? "text-green-600 dark:text-green-400" 
-                                    : (stripeMetricsData.metrics.grossVolume - selectedWeek.metrics.totalRevenue) < 0 
+                                    : (stripeMetricsData.metrics.grossVolume - selectedPeriod.metrics.totalRevenue) < 0 
                                       ? "text-red-600 dark:text-red-400" 
                                       : ""
                                 )}>
-                                  {formatValue(stripeMetricsData.metrics.grossVolume - selectedWeek.metrics.totalRevenue, "currency")}
+                                  {formatValue(stripeMetricsData.metrics.grossVolume - selectedPeriod.metrics.totalRevenue, "currency")}
                                 </p>
                               </div>
                             </div>
@@ -694,7 +728,7 @@ export default function WeeklyPerformance() {
               
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-semibold">All Weeks</h2>
+                  <h2 className="text-lg font-semibold">All {periodType === "monthly" ? "Months" : "Weeks"}</h2>
                   <p className="text-xs text-muted-foreground">Click a row to view details above</p>
                 </div>
                 <Card className="overflow-hidden">
@@ -702,7 +736,7 @@ export default function WeeklyPerformance() {
                     <Table className="min-w-max">
                       <TableHeader>
                         <TableRow>
-                          <TableHead className="sticky left-0 bg-card z-10 min-w-[140px] whitespace-nowrap">Week</TableHead>
+                          <TableHead className="sticky left-0 bg-card z-10 min-w-[140px] whitespace-nowrap">{periodType === "monthly" ? "Month" : "Week"}</TableHead>
                           {metricConfig.map((metric) => (
                             <TableHead key={metric.key} className="text-right min-w-[110px] whitespace-nowrap">
                               <div className="flex flex-col items-end">
@@ -716,30 +750,30 @@ export default function WeeklyPerformance() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {weeks.map((week, index) => (
+                        {periods.map((period, index) => (
                           <TableRow 
-                            key={week.weekLabel} 
+                            key={period.periodLabel} 
                             className={cn(
                               "cursor-pointer transition-colors hover-elevate",
-                              index === selectedWeekIndex && "bg-accent",
-                              index === 0 && index !== selectedWeekIndex && "bg-muted"
+                              index === selectedPeriodIndex && "bg-accent",
+                              index === 0 && index !== selectedPeriodIndex && "bg-muted"
                             )}
-                            onClick={() => setSelectedWeekIndex(index)}
-                            data-testid={`row-week-${index}`}
+                            onClick={() => setSelectedPeriodIndex(index)}
+                            data-testid={`row-period-${index}`}
                           >
                             <TableCell className={cn(
                               "sticky left-0 z-10 font-medium",
-                              index === selectedWeekIndex ? "bg-accent" : index === 0 ? "bg-muted" : "bg-card"
+                              index === selectedPeriodIndex ? "bg-accent" : index === 0 ? "bg-muted" : "bg-card"
                             )}>
                               <div className="flex flex-col">
-                                <span>{week.weekLabel}</span>
+                                <span>{period.periodLabel}</span>
                                 <div className="flex gap-1 mt-1">
                                   {index === 0 && (
                                     <Badge variant="secondary" className="text-[10px] w-fit">
                                       Current
                                     </Badge>
                                   )}
-                                  {index === selectedWeekIndex && (
+                                  {index === selectedPeriodIndex && (
                                     <Badge variant="default" className="text-[10px] w-fit">
                                       Selected
                                     </Badge>
@@ -751,11 +785,11 @@ export default function WeeklyPerformance() {
                               <TableCell key={metric.key} className="text-right">
                                 <div className="flex flex-col items-end gap-1">
                                   <span className="font-medium">
-                                    {formatValue(week.metrics[metric.key], metric.format)}
+                                    {formatValue(period.metrics[metric.key], metric.format)}
                                   </span>
-                                  {week.variance && (
+                                  {period.variance && (
                                     <VarianceBadge 
-                                      value={week.variance[metric.key]} 
+                                      value={period.variance[metric.key]} 
                                       isPercentPoint={metric.isPercentPoint}
                                     />
                                   )}
@@ -819,7 +853,7 @@ export default function WeeklyPerformance() {
                 <Bot className="h-12 w-12 mx-auto mb-4 opacity-50" />
                 <p className="font-medium">Ask about your dashboard</p>
                 <p className="text-xs mt-2">
-                  I can help you understand metrics, compare weeks, and identify trends.
+                  I can help you understand metrics, compare {periodType === "monthly" ? "months" : "weeks"}, and identify trends.
                 </p>
                 <div className="mt-4 space-y-2">
                   <Button

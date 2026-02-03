@@ -3407,6 +3407,7 @@ Always be helpful and explain your suggestions in simple terms.`;
   app.get("/api/weekly-performance/:database", isAuthenticated, async (req, res) => {
     try {
       const { database } = req.params;
+      const periodType = (req.query.periodType as string) || "weekly";
       const zonesParam = req.query.zones as string | undefined;
       const forceRefresh = req.query.refresh === "true";
       const userId = (req.user as any)?.id;
@@ -3420,7 +3421,7 @@ Always be helpful and explain your suggestions in simple terms.`;
       const selectedZones = zonesParam ? zonesParam.split(',').filter(z => z.trim()) : [];
       
       // Check cache first (unless force refresh)
-      const cacheKey = getCacheKey("marketing", database, "weekly", undefined, selectedZones);
+      const cacheKey = getCacheKey("marketing", database, periodType, undefined, selectedZones);
       if (!forceRefresh) {
         const cachedData = getFromCache<any>(cacheKey);
         if (cachedData) {
@@ -3451,9 +3452,9 @@ Always be helpful and explain your suggestions in simple terms.`;
         };
       };
       
-      // Generate week ranges from Dec 29, 2025 to current week (Mon-Sun, PST)
-      // Use explicit PST dates to handle DST correctly
-      const weeks: { startUTC: string; endUTC: string; label: string }[] = [];
+      // Generate periods based on periodType
+      const periods: { startUTC: string; endUTC: string; label: string }[] = [];
+      const now = new Date();
       
       // Helper to get PST offset for a given date (handles DST)
       const getPSTOffset = (date: Date): string => {
@@ -3480,64 +3481,89 @@ Always be helpful and explain your suggestions in simple terms.`;
         }
       };
       
-      // Start from Dec 29, 2025 (Monday) - iterate by week
-      let currentYear = 2025;
-      let currentMonth = 11; // December (0-indexed)
-      let currentDay = 29;
-      
-      const now = new Date();
-      
-      while (true) {
-        // Build week start date string in PST
-        const weekStartDate = new Date(currentYear, currentMonth, currentDay);
-        const startOffset = getPSTOffset(weekStartDate);
-        const startDateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}T00:00:00${startOffset}`;
-        const weekStartUTC = new Date(startDateStr).toISOString();
+      if (periodType === "monthly") {
+        // Generate last 12 months (most recent first)
+        for (let i = 0; i < 12; i++) {
+          const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+          
+          // Skip future months
+          if (monthStart > now) continue;
+          
+          const startOffset = getPSTOffset(monthStart);
+          const endOffset = getPSTOffset(monthEnd);
+          
+          const startDateStr = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01T00:00:00${startOffset}`;
+          const endDateStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-01T00:00:00${endOffset}`;
+          
+          const label = monthStart.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+          
+          periods.push({
+            startUTC: new Date(startDateStr).toISOString(),
+            endUTC: new Date(endDateStr).toISOString(),
+            label,
+          });
+        }
+      } else {
+        // Weekly: Generate week ranges from Dec 29, 2025 to current week (Mon-Sun, PST)
+        let currentYear = 2025;
+        let currentMonth = 11; // December (0-indexed)
+        let currentDay = 29;
         
-        // Week end is 7 days later (next Monday at midnight) for exclusive upper bound
-        // This ensures we capture all of Sunday (the 7th day of the week)
-        const weekEndDate = new Date(currentYear, currentMonth, currentDay + 7);
-        const endYear = weekEndDate.getFullYear();
-        const endMonth = weekEndDate.getMonth();
-        const endDay = weekEndDate.getDate();
-        const endOffset = getPSTOffset(weekEndDate);
-        const endDateStr = `${endYear}-${String(endMonth + 1).padStart(2, '0')}-${String(endDay).padStart(2, '0')}T00:00:00${endOffset}`;
-        const weekEndUTC = new Date(endDateStr).toISOString();
+        while (true) {
+          // Build week start date string in PST
+          const weekStartDate = new Date(currentYear, currentMonth, currentDay);
+          const startOffset = getPSTOffset(weekStartDate);
+          const startDateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}T00:00:00${startOffset}`;
+          const weekStartUTC = new Date(startDateStr).toISOString();
+          
+          // Week end is 7 days later (next Monday at midnight) for exclusive upper bound
+          const weekEndDate = new Date(currentYear, currentMonth, currentDay + 7);
+          const endYear = weekEndDate.getFullYear();
+          const endMonth = weekEndDate.getMonth();
+          const endDay = weekEndDate.getDate();
+          const endOffset = getPSTOffset(weekEndDate);
+          const endDateStr = `${endYear}-${String(endMonth + 1).padStart(2, '0')}-${String(endDay).padStart(2, '0')}T00:00:00${endOffset}`;
+          const weekEndUTC = new Date(endDateStr).toISOString();
+          
+          // If week start is past today, stop
+          if (new Date(weekStartUTC) > now) break;
+          
+          // Format label as "Dec 29 - Jan 4" (use Sunday, which is 6 days after Monday start)
+          const labelEndDate = new Date(currentYear, currentMonth, currentDay + 6);
+          const startMonthLabel = weekStartDate.toLocaleDateString("en-US", { month: "short" });
+          const startDayLabel = weekStartDate.getDate();
+          const endMonthLabel = labelEndDate.toLocaleDateString("en-US", { month: "short" });
+          const endDayLabel = labelEndDate.getDate();
+          
+          const label = startMonthLabel === endMonthLabel 
+            ? `${startMonthLabel} ${startDayLabel} - ${endDayLabel}`
+            : `${startMonthLabel} ${startDayLabel} - ${endMonthLabel} ${endDayLabel}`;
+          
+          periods.push({ startUTC: weekStartUTC, endUTC: weekEndUTC, label });
+          
+          // Move to next Monday (add 7 days)
+          const nextMonday = new Date(currentYear, currentMonth, currentDay + 7);
+          currentYear = nextMonday.getFullYear();
+          currentMonth = nextMonday.getMonth();
+          currentDay = nextMonday.getDate();
+        }
         
-        // If week start is past today, stop
-        if (new Date(weekStartUTC) > now) break;
-        
-        // Format label as "Dec 29 - Jan 4" (use Sunday, which is 6 days after Monday start)
-        const labelEndDate = new Date(currentYear, currentMonth, currentDay + 6); // Sunday
-        const startMonthLabel = weekStartDate.toLocaleDateString("en-US", { month: "short" });
-        const startDayLabel = weekStartDate.getDate();
-        const endMonthLabel = labelEndDate.toLocaleDateString("en-US", { month: "short" });
-        const endDayLabel = labelEndDate.getDate();
-        
-        const label = startMonthLabel === endMonthLabel 
-          ? `${startMonthLabel} ${startDayLabel} - ${endDayLabel}`
-          : `${startMonthLabel} ${startDayLabel} - ${endMonthLabel} ${endDayLabel}`;
-        
-        weeks.push({ startUTC: weekStartUTC, endUTC: weekEndUTC, label });
-        
-        // Move to next Monday (add 7 days)
-        const nextMonday = new Date(currentYear, currentMonth, currentDay + 7);
-        currentYear = nextMonday.getFullYear();
-        currentMonth = nextMonday.getMonth();
-        currentDay = nextMonday.getDate();
+        // Reverse weekly periods to show most recent first
+        periods.reverse();
       }
       
-      // Calculate metrics for each week
-      const weeklyData: any[] = [];
+      // Calculate metrics for each period
+      const periodsData: any[] = [];
       
-      for (const week of weeks) {
-        const weekStartUTC = week.startUTC;
-        const weekEndUTC = week.endUTC;
+      for (const period of periods) {
+        const periodStartUTC = period.startUTC;
+        const periodEndUTC = period.endUTC;
         
         // Build zone filter for this iteration
-        const zoneFilter = buildZoneFilter('b', 3); // params start at $3 (after weekStart, weekEnd)
+        const zoneFilter = buildZoneFilter('b', 3); // params start at $3 (after periodStart, periodEnd)
         const zoneFilterNoAlias = buildZoneFilter('public.bookings', 3);
-        const baseParams = [weekStartUTC, weekEndUTC];
+        const baseParams = [periodStartUTC, periodEndUTC];
         const paramsWithZones = [...baseParams, ...zoneFilter.params];
         
         // Run all queries in parallel for efficiency
@@ -3758,7 +3784,7 @@ Always be helpful and explain your suggestions in simple terms.`;
         const totalRevenue = bookingRevenue + subscriptionFees + customerFees + tipRevenue + creditPackRevenue - refundsTotal - stripeFees;
         
         // Debug logging for revenue validation
-        console.log(`[REVENUE DEBUG] ${week.label}: Booking=$${bookingRevenue.toFixed(2)}, SubFees=$${subscriptionFees.toFixed(2)}, CustFees=$${customerFees.toFixed(2)}, Tips=$${tipRevenue.toFixed(2)}, CreditPacks=$${creditPackRevenue.toFixed(2)}, Refunds=$${refundsTotal.toFixed(2)}, StripeFees=$${stripeFees.toFixed(2)}, TOTAL=$${totalRevenue.toFixed(2)}`);
+        console.log(`[REVENUE DEBUG] ${period.label}: Booking=$${bookingRevenue.toFixed(2)}, SubFees=$${subscriptionFees.toFixed(2)}, CustFees=$${customerFees.toFixed(2)}, Tips=$${tipRevenue.toFixed(2)}, CreditPacks=$${creditPackRevenue.toFixed(2)}, Refunds=$${refundsTotal.toFixed(2)}, StripeFees=$${stripeFees.toFixed(2)}, TOTAL=$${totalRevenue.toFixed(2)}`);
         
         // Gross Profit = booking margin + subscription fees (100% margin) + customer fees (100% margin) + tip profit - refunds
         // (subscriptionBookingProfit is already part of bookingProfit, so we don't add it again)
@@ -3779,10 +3805,10 @@ Always be helpful and explain your suggestions in simple terms.`;
           ? (subscriptionRevenue / totalRevenue) * 100 
           : 0;
         
-        weeklyData.push({
-          weekLabel: week.label,
-          weekStart: weekStartUTC,
-          weekEnd: weekEndUTC,
+        periodsData.push({
+          periodLabel: period.label,
+          periodStart: periodStartUTC,
+          periodEnd: periodEndUTC,
           metrics: {
             bookingsCreated,
             bookingsDue,
@@ -3805,46 +3831,92 @@ Always be helpful and explain your suggestions in simple terms.`;
         });
       }
       
-      // Calculate variance (compare each week to previous week)
-      const weeklyDataWithVariance = weeklyData.map((week, index) => {
-        if (index === 0) {
-          return { ...week, variance: null };
+      // Calculate variance (compare each period to previous period)
+      // For weekly: periods are already in chronological order (oldest first), then reversed
+      // For monthly: periods are already in reverse chronological order (newest first)
+      // We need to calculate variance comparing each period to the one that came BEFORE it chronologically
+      const periodsDataWithVariance = periodsData.map((periodItem, index) => {
+        // For variance, we compare to the previous period in the array
+        // Since periodsData is in chronological order (oldest first) for weekly
+        // and reverse chronological for monthly, we need to handle differently
+        if (periodType === "monthly") {
+          // Monthly: array is newest first, so previous chronological period is at index + 1
+          if (index === periodsData.length - 1) {
+            return { ...periodItem, variance: null };
+          }
+          const prev = periodsData[index + 1].metrics;
+          const curr = periodItem.metrics;
+          
+          const calcVariance = (current: number, previous: number) => {
+            if (previous === 0) return current > 0 ? 100 : 0;
+            return Math.round(((current - previous) / previous) * 100 * 100) / 100;
+          };
+          
+          return {
+            ...periodItem,
+            variance: {
+              bookingsCreated: calcVariance(curr.bookingsCreated, prev.bookingsCreated),
+              bookingsDue: calcVariance(curr.bookingsDue, prev.bookingsDue),
+              bookingsCompleted: calcVariance(curr.bookingsCompleted, prev.bookingsCompleted),
+              avgPerDay: calcVariance(curr.avgPerDay, prev.avgPerDay),
+              conversion: Math.round((curr.conversion - prev.conversion) * 100) / 100,
+              avgBookingPrice: calcVariance(curr.avgBookingPrice, prev.avgBookingPrice),
+              totalRevenue: calcVariance(curr.totalRevenue, prev.totalRevenue),
+              totalProfit: calcVariance(curr.totalProfit, prev.totalProfit),
+              marginPercent: Math.round((curr.marginPercent - prev.marginPercent) * 100) / 100,
+              signups: calcVariance(curr.signups, prev.signups),
+              newUsersWithBookings: calcVariance(curr.newUsersWithBookings, prev.newUsersWithBookings),
+              newUserConversion: Math.round((curr.newUserConversion - prev.newUserConversion) * 100) / 100,
+              subscriptionRevenue: calcVariance(curr.subscriptionRevenue, prev.subscriptionRevenue),
+              subscriptionFees: calcVariance(curr.subscriptionFees, prev.subscriptionFees),
+              memberBookings: calcVariance(curr.memberBookings, prev.memberBookings),
+              membershipRevenuePercent: Math.round((curr.membershipRevenuePercent - prev.membershipRevenuePercent) * 100) / 100,
+              newSubscriptions: calcVariance(curr.newSubscriptions, prev.newSubscriptions),
+            },
+          };
+        } else {
+          // Weekly: array is oldest first, so previous chronological period is at index - 1
+          if (index === 0) {
+            return { ...periodItem, variance: null };
+          }
+          
+          const prev = periodsData[index - 1].metrics;
+          const curr = periodItem.metrics;
+          
+          const calcVariance = (current: number, previous: number) => {
+            if (previous === 0) return current > 0 ? 100 : 0;
+            return Math.round(((current - previous) / previous) * 100 * 100) / 100;
+          };
+          
+          return {
+            ...periodItem,
+            variance: {
+              bookingsCreated: calcVariance(curr.bookingsCreated, prev.bookingsCreated),
+              bookingsDue: calcVariance(curr.bookingsDue, prev.bookingsDue),
+              bookingsCompleted: calcVariance(curr.bookingsCompleted, prev.bookingsCompleted),
+              avgPerDay: calcVariance(curr.avgPerDay, prev.avgPerDay),
+              conversion: Math.round((curr.conversion - prev.conversion) * 100) / 100,
+              avgBookingPrice: calcVariance(curr.avgBookingPrice, prev.avgBookingPrice),
+              totalRevenue: calcVariance(curr.totalRevenue, prev.totalRevenue),
+              totalProfit: calcVariance(curr.totalProfit, prev.totalProfit),
+              marginPercent: Math.round((curr.marginPercent - prev.marginPercent) * 100) / 100,
+              signups: calcVariance(curr.signups, prev.signups),
+              newUsersWithBookings: calcVariance(curr.newUsersWithBookings, prev.newUsersWithBookings),
+              newUserConversion: Math.round((curr.newUserConversion - prev.newUserConversion) * 100) / 100,
+              subscriptionRevenue: calcVariance(curr.subscriptionRevenue, prev.subscriptionRevenue),
+              subscriptionFees: calcVariance(curr.subscriptionFees, prev.subscriptionFees),
+              memberBookings: calcVariance(curr.memberBookings, prev.memberBookings),
+              membershipRevenuePercent: Math.round((curr.membershipRevenuePercent - prev.membershipRevenuePercent) * 100) / 100,
+              newSubscriptions: calcVariance(curr.newSubscriptions, prev.newSubscriptions),
+            },
+          };
         }
-        
-        const prev = weeklyData[index - 1].metrics;
-        const curr = week.metrics;
-        
-        const calcVariance = (current: number, previous: number) => {
-          if (previous === 0) return current > 0 ? 100 : 0;
-          return Math.round(((current - previous) / previous) * 100 * 100) / 100;
-        };
-        
-        return {
-          ...week,
-          variance: {
-            bookingsCreated: calcVariance(curr.bookingsCreated, prev.bookingsCreated),
-            bookingsDue: calcVariance(curr.bookingsDue, prev.bookingsDue),
-            bookingsCompleted: calcVariance(curr.bookingsCompleted, prev.bookingsCompleted),
-            avgPerDay: calcVariance(curr.avgPerDay, prev.avgPerDay),
-            conversion: Math.round((curr.conversion - prev.conversion) * 100) / 100, // pp change
-            avgBookingPrice: calcVariance(curr.avgBookingPrice, prev.avgBookingPrice),
-            totalRevenue: calcVariance(curr.totalRevenue, prev.totalRevenue),
-            totalProfit: calcVariance(curr.totalProfit, prev.totalProfit),
-            marginPercent: Math.round((curr.marginPercent - prev.marginPercent) * 100) / 100, // pp change
-            signups: calcVariance(curr.signups, prev.signups),
-            newUsersWithBookings: calcVariance(curr.newUsersWithBookings, prev.newUsersWithBookings),
-            newUserConversion: Math.round((curr.newUserConversion - prev.newUserConversion) * 100) / 100, // pp change
-            subscriptionRevenue: calcVariance(curr.subscriptionRevenue, prev.subscriptionRevenue),
-            subscriptionFees: calcVariance(curr.subscriptionFees, prev.subscriptionFees),
-            memberBookings: calcVariance(curr.memberBookings, prev.memberBookings),
-            membershipRevenuePercent: Math.round((curr.membershipRevenuePercent - prev.membershipRevenuePercent) * 100) / 100,
-            newSubscriptions: calcVariance(curr.newSubscriptions, prev.newSubscriptions),
-          },
-        };
       });
       
-      // Reverse to show most recent first
-      weeklyDataWithVariance.reverse();
+      // Reverse weekly to show most recent first (monthly already newest first)
+      if (periodType !== "monthly") {
+        periodsDataWithVariance.reverse();
+      }
       
       await logAudit({
         userId,
@@ -3853,11 +3925,12 @@ Always be helpful and explain your suggestions in simple terms.`;
         database,
         table: undefined,
         ip: req.ip || undefined,
-        details: `Viewed ${weeklyDataWithVariance.length} weeks`,
+        details: `Viewed ${periodsDataWithVariance.length} ${periodType === 'monthly' ? 'months' : 'weeks'}`,
       });
       
       const responseData = {
-        weeks: weeklyDataWithVariance,
+        periods: periodsDataWithVariance,
+        periodType,
         generatedAt: new Date().toISOString(),
         selectedZones: selectedZones.length > 0 ? selectedZones : null,
       };
@@ -3878,7 +3951,7 @@ Always be helpful and explain your suggestions in simple terms.`;
   app.post("/api/weekly-performance/:database/chat", isAuthenticated, reportAILimiter, async (req, res) => {
     try {
       const { database } = req.params;
-      const { message, dashboardData, selectedWeek } = req.body;
+      const { message, dashboardData, selectedWeek, periodType = "weekly" } = req.body;
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       
@@ -3901,25 +3974,31 @@ Always be helpful and explain your suggestions in simple terms.`;
       // Import metric specs
       const { METRIC_SPECS, getAllMetricSpecs } = await import("./weeklyMetrics");
       
-      // Build context about the dashboard data with explicit week dates
+      // Build context about the dashboard data with explicit period dates
       const currentYear = new Date().getFullYear();
-      const availableWeeksContext = dashboardData?.weeks?.length > 0
-        ? `Available weeks with their EXACT date ranges (use these dates for drill-down):\n${dashboardData.weeks.map((w: any) => 
-            `- "${w.weekLabel}": weekStart="${w.weekStart}", weekEnd="${w.weekEnd}"`
+      const periodLabel = periodType === "monthly" ? "month" : "week";
+      const periodsLabel = periodType === "monthly" ? "months" : "weeks";
+      
+      // Support both old (weeks) and new (periods) data format
+      const periods = dashboardData?.periods || dashboardData?.weeks || [];
+      
+      const availablePeriodsContext = periods.length > 0
+        ? `Available ${periodsLabel} with their EXACT date ranges (use these dates for drill-down):\n${periods.map((p: any) => 
+            `- "${p.periodLabel || p.weekLabel}": periodStart="${p.periodStart || p.weekStart}", periodEnd="${p.periodEnd || p.weekEnd}"`
           ).join('\n')}`
         : '';
       
-      const metricsContext = dashboardData?.weeks?.length > 0 
-        ? `The dashboard currently shows ${dashboardData.weeks.length} weeks of data.
+      const metricsContext = periods.length > 0 
+        ? `The dashboard currently shows ${periods.length} ${periodsLabel} of data.
           
-The most recent week (${dashboardData.weeks[0]?.weekLabel || 'Current'}) has these metrics:
-${JSON.stringify(dashboardData.weeks[0]?.metrics || {}, null, 2)}
+The most recent ${periodLabel} (${periods[0]?.periodLabel || periods[0]?.weekLabel || 'Current'}) has these metrics:
+${JSON.stringify(periods[0]?.metrics || {}, null, 2)}
 
-${dashboardData.weeks[0]?.variance ? `Week-over-week variance (% change, or percentage point change for rates):
-${JSON.stringify(dashboardData.weeks[0].variance, null, 2)}` : ''}
+${periods[0]?.variance ? `${periodType === "monthly" ? "Month-over-month" : "Week-over-week"} variance (% change, or percentage point change for rates):
+${JSON.stringify(periods[0].variance, null, 2)}` : ''}
 
-${dashboardData.weeks.length > 1 ? `Previous week (${dashboardData.weeks[1]?.weekLabel}) metrics:
-${JSON.stringify(dashboardData.weeks[1]?.metrics || {}, null, 2)}` : ''}
+${periods.length > 1 ? `Previous ${periodLabel} (${periods[1]?.periodLabel || periods[1]?.weekLabel}) metrics:
+${JSON.stringify(periods[1]?.metrics || {}, null, 2)}` : ''}
 `
         : "No dashboard data is currently loaded.";
       
@@ -3928,12 +4007,17 @@ ${JSON.stringify(dashboardData.weeks[1]?.metrics || {}, null, 2)}` : ''}
         `- ${m.name} (id: ${m.id}): ${m.description}\n  Formula: ${m.formula}${m.subSources ? `\n  Sub-sources: ${m.subSources.map(s => s.name).join(", ")}` : ""}`
       ).join("\n\n");
       
-      const systemPrompt = `You are an AI assistant for the WashOS Weekly Marketing Performance Dashboard. Your role is to help users understand and analyze their weekly business metrics.
+      // Get selected period info with fallbacks for old/new format
+      const selectedPeriodLabel = selectedWeek?.periodLabel || selectedWeek?.weekLabel;
+      const selectedPeriodStart = selectedWeek?.periodStart || selectedWeek?.weekStart;
+      const selectedPeriodEnd = selectedWeek?.periodEnd || selectedWeek?.weekEnd;
+      
+      const systemPrompt = `You are an AI assistant for the WashOS Marketing Performance Dashboard. Your role is to help users understand and analyze their business metrics.
 
 IMPORTANT: The current year is ${currentYear}. When users mention dates like "Jan 12-18", they mean ${currentYear}, NOT any other year.
 
 DASHBOARD CONTEXT:
-The Weekly Marketing Performance Dashboard tracks these key metrics week over week (Monday-Sunday, Pacific Time):
+The Marketing Performance Dashboard tracks these key metrics ${periodType === "monthly" ? "month over month" : "week over week"} (Pacific Time):
 
 METRIC DEFINITIONS AND FORMULAS:
 ${metricSpecsList}
@@ -3941,11 +4025,11 @@ ${metricSpecsList}
 CURRENT DATA:
 ${metricsContext}
 
-${selectedWeek ? `SELECTED WEEK: ${selectedWeek.weekLabel} (${selectedWeek.weekStart} to ${selectedWeek.weekEnd})` : ''}
+${selectedPeriodLabel ? `SELECTED ${periodType === "monthly" ? "MONTH" : "WEEK"}: ${selectedPeriodLabel} (${selectedPeriodStart} to ${selectedPeriodEnd})` : ''}
 
-${availableWeeksContext}
+${availablePeriodsContext}
 
-CRITICAL: When calling get_metric_rows, you MUST use the EXACT weekStart and weekEnd values from the available weeks list above. Look up the week label the user mentions (e.g., "Jan 12 - 18") and use its corresponding weekStart and weekEnd values. Do NOT make up date values.
+CRITICAL: When calling get_metric_rows, you MUST use the EXACT periodStart and periodEnd values from the available ${periodsLabel} list above. Look up the ${periodLabel} label the user mentions and use its corresponding periodStart and periodEnd values. Do NOT make up date values.
 
 ${canDrillDown ? `DRILL-DOWN CAPABILITY:
 You have access to tools to fetch the actual database rows that make up each metric.
@@ -3961,7 +4045,7 @@ IMPORTANT FOR BREAKDOWNS: When a user asks to "break down" a metric with sub-sou
 INSTRUCTIONS:
 1. Answer questions about the metrics, trends, and performance
 2. Help users understand what the numbers mean and provide insights
-3. Compare weeks when relevant data is available
+3. Compare ${periodsLabel} when relevant data is available
 4. Explain variances and what might be driving changes
 5. Be concise but informative
 6. Format numbers appropriately (currency with $, percentages with %, etc.)

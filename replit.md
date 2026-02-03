@@ -111,17 +111,18 @@ filters.json       # Admin-configured filter definitions (per table)
 - Uses read-only API access (balance transactions and disputes)
 - Protected by authentication - only logged-in users can access Stripe data
 
-### Weekly Marketing Performance Dashboard
+### Marketing Performance Dashboard
 - Accessible at `/weekly-performance` via sidebar button
-- Displays 16 key business metrics per week (Monday-Sunday, PST):
+- Supports both weekly and monthly period views via toggle buttons in header
+- Displays 16 key business metrics per period (PST timezone):
   - **Bookings**: Created, Due, Completed, Avg/Day, Conversion (Done/Due)
   - **Revenue**: Avg Booking Price, Total Revenue, Gross Profit, Margin %
   - **Users**: Sign Ups, New Users (with booking), New User Conversion
   - **Membership**: Subscription Revenue, Member Bookings, % from Members, New Memberships
-- Shows variance compared to previous week (percentage or percentage point change)
-- Data from Dec 29, 2025 onward, current week at top
-- Handles PST/PDT timezone correctly for week boundaries
-- Week boundaries: Monday 00:00:00 PST to next Monday 00:00:00 PST (exclusive)
+- Shows variance compared to previous period (percentage or percentage point change)
+- Weekly view: Data from Dec 29, 2025 onward, week boundaries Monday 00:00:00 PST to next Monday 00:00:00 PST (exclusive)
+- Monthly view: Shows last 12 months, month boundaries 1st of month 00:00:00 PST
+- Handles PST/PDT timezone correctly for period boundaries
 - **Zone Filtering**: Multi-select filter to analyze metrics by geographic region
   - Filter button shows "All Zones", "1 Zone", or "X Zones" based on selection
   - Applies to booking-related metrics: Bookings Created/Due/Completed, Revenue, Tips, Refunds, Member Bookings

@@ -352,45 +352,89 @@ export interface OperationsPeriodMetrics {
   variance?: Record<string, number | null>;
 }
 
+// Helper to build booking-based zone filter (via address -> district)
+function buildBookingZoneFilter(
+  bookingAlias: string = 'b',
+  paramOffset: number = 3,
+  selectedZones: string[]
+): { clause: string; params: string[] } {
+  if (selectedZones.length === 0) {
+    return { clause: '', params: [] };
+  }
+  const placeholders = selectedZones.map((_, i) => `$${paramOffset + i}`).join(', ');
+  return {
+    clause: `
+      AND ${bookingAlias}.address_id IN (
+        SELECT addr.id FROM public.addresses addr
+        INNER JOIN public.districts d ON d.id = addr.district_id
+        WHERE d.abbreviation IN (${placeholders})
+      )
+    `,
+    params: selectedZones
+  };
+}
+
+// Helper to build vendor-based zone filter (via vendors.washos_zone)
+function buildVendorZoneFilter(
+  vendorAlias: string = 'v',
+  paramOffset: number = 3,
+  selectedZones: string[]
+): { clause: string; params: string[] } {
+  if (selectedZones.length === 0) {
+    return { clause: '', params: [] };
+  }
+  const placeholders = selectedZones.map((_, i) => `$${paramOffset + i}`).join(', ');
+  return {
+    clause: ` AND ${vendorAlias}.washos_zone IN (${placeholders})`,
+    params: selectedZones
+  };
+}
+
 export async function calculateOperationsMetrics(
   pool: Pool,
   periodStart: string,
   periodEnd: string,
-  stripeMetrics?: { grossVolume: number; netVolume: number } | null
+  stripeMetrics?: { grossVolume: number; netVolume: number } | null,
+  selectedZones: string[] = []
 ): Promise<OperationsPeriodMetrics["metrics"]> {
   
-  // Bookings Completed
+  // Bookings Completed (zone-filtered via address -> district)
+  const bookingZoneFilter = buildBookingZoneFilter('b', 3, selectedZones);
   const bookingsCompletedResult = await pool.query(
-    `SELECT COUNT(*) as count FROM public.bookings 
-     WHERE date_due >= $1 AND date_due < $2 AND status = 'done'`,
-    [periodStart, periodEnd]
+    `SELECT COUNT(*) as count FROM public.bookings b
+     WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'${bookingZoneFilter.clause}`,
+    [periodStart, periodEnd, ...bookingZoneFilter.params]
   );
   const bookingsCompleted = parseInt(bookingsCompletedResult.rows[0]?.count || "0");
 
-  // Bookings Created (for percentage calculations)
+  // Bookings Created (for percentage calculations) - zone-filtered
+  const bookingsCreatedZoneFilter = buildBookingZoneFilter('b', 3, selectedZones);
   const bookingsCreatedResult = await pool.query(
-    `SELECT COUNT(*) as count FROM public.bookings 
-     WHERE created_at >= $1 AND created_at < $2`,
-    [periodStart, periodEnd]
+    `SELECT COUNT(*) as count FROM public.bookings b
+     WHERE b.created_at >= $1 AND b.created_at < $2${bookingsCreatedZoneFilter.clause}`,
+    [periodStart, periodEnd, ...bookingsCreatedZoneFilter.params]
   );
   const bookingsCreated = parseInt(bookingsCreatedResult.rows[0]?.count || "0");
 
-  // Emergencies % (with bookings_count > 0) as percentage of bookings completed
+  // Emergencies % (with bookings_count > 0) - zone-filtered via vendor
+  const emergencyVendorZoneFilter = buildVendorZoneFilter('v', 3, selectedZones);
   const emergenciesResult = await pool.query(
-    `SELECT COUNT(*) as count FROM public.vendor_emergencies 
-     WHERE bookings_count > 0 AND created_at >= $1 AND created_at < $2`,
-    [periodStart, periodEnd]
+    `SELECT COUNT(*) as count FROM public.vendor_emergencies ve
+     INNER JOIN public.vendors v ON v.id = ve.vendor_id
+     WHERE ve.bookings_count > 0 AND ve.created_at >= $1 AND ve.created_at < $2${emergencyVendorZoneFilter.clause}`,
+    [periodStart, periodEnd, ...emergencyVendorZoneFilter.params]
   );
   const emergenciesCount = parseInt(emergenciesResult.rows[0]?.count || "0");
   const emergencies = bookingsCompleted > 0 ? (emergenciesCount / bookingsCompleted) * 100 : 0;
 
-  // Delivery Rate: cancelled for vendor reasons vs completed
+  // Delivery Rate: cancelled for vendor reasons vs completed - zone-filtered
+  const cancellationZoneFilter = buildBookingZoneFilter('b', 3, selectedZones);
   const cancellationsResult = await pool.query(
     `SELECT COUNT(*) as count FROM public.cancelled_bookings cb
      INNER JOIN public.bookings b ON b.id = cb.booking_id
      WHERE b.date_due >= $1 AND b.date_due < $2
-       AND cb.cancel_reason_id IN (4, 5, 6, 7, 8, 9, 17, 18)`,
-    [periodStart, periodEnd]
+       AND cb.cancel_reason_id IN (4, 5, 6, 7, 8, 9, 17, 18)${cancellationZoneFilter.clause}`,
+    [periodStart, periodEnd, ...cancellationZoneFilter.params]
   );
   const vendorCancellations = parseInt(cancellationsResult.rows[0]?.count || "0");
   const deliveryRate = bookingsCompleted > 0 
@@ -398,47 +442,53 @@ export async function calculateOperationsMetrics(
     : 0;
 
   // Defect %: rescheduling requests with vendor-related reasons + cancellations with specific reasons
-  // Count unique booking_ids across BOTH sources (a booking in both counts only once)
+  // Zone-filtered via booking address
+  const defectZoneFilter = buildBookingZoneFilter('b', 3, selectedZones);
   const defectsResult = await pool.query(
     `SELECT COUNT(DISTINCT booking_id) as count FROM (
-       SELECT booking_id FROM public.rescheduling_requests 
-       WHERE requested_at >= $1 AND requested_at < $2
-         AND reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')
+       SELECT rr.booking_id FROM public.rescheduling_requests rr
+       INNER JOIN public.bookings b ON b.id = rr.booking_id
+       WHERE rr.requested_at >= $1 AND rr.requested_at < $2
+         AND rr.reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')${defectZoneFilter.clause}
        UNION ALL
        SELECT cb.booking_id FROM public.cancelled_bookings cb
        INNER JOIN public.bookings b ON b.id = cb.booking_id
        WHERE b.date_due >= $1 AND b.date_due < $2
-         AND cb.cancel_reason_id IN (4,5,6,7,8,9,17,18)
+         AND cb.cancel_reason_id IN (4,5,6,7,8,9,17,18)${defectZoneFilter.clause}
      ) all_defects`,
-    [periodStart, periodEnd]
+    [periodStart, periodEnd, ...defectZoneFilter.params]
   );
   const totalDefects = parseInt(defectsResult.rows[0]?.count || "0");
   const defectPercent = bookingsCompleted > 0 ? (totalDefects / bookingsCompleted) * 100 : 0;
 
-  // Overbooked %
+  // Overbooked % - zone-filtered
+  const overbookedZoneFilter = buildBookingZoneFilter('b', 3, selectedZones);
   const overbookedResult = await pool.query(
-    `SELECT COUNT(*) as count FROM public.bookings 
-     WHERE created_at >= $1 AND created_at < $2 AND overbooked = true`,
-    [periodStart, periodEnd]
+    `SELECT COUNT(*) as count FROM public.bookings b
+     WHERE b.created_at >= $1 AND b.created_at < $2 AND b.overbooked = true${overbookedZoneFilter.clause}`,
+    [periodStart, periodEnd, ...overbookedZoneFilter.params]
   );
   const overbooked = parseInt(overbookedResult.rows[0]?.count || "0");
   const overbookedPercent = bookingsCreated > 0 ? (overbooked / bookingsCreated) * 100 : 0;
 
-  // Average Rating
+  // Average Rating - zone-filtered via booking
+  const ratingZoneFilter = buildBookingZoneFilter('b', 3, selectedZones);
   const ratingResult = await pool.query(
-    `SELECT AVG(rating) as avg_rating FROM public.booking_ratings 
-     WHERE created_at >= $1 AND created_at < $2 AND rating IS NOT NULL`,
-    [periodStart, periodEnd]
+    `SELECT AVG(br.rating) as avg_rating FROM public.booking_ratings br
+     INNER JOIN public.bookings b ON b.id = br.booking_id
+     WHERE br.created_at >= $1 AND br.created_at < $2 AND br.rating IS NOT NULL${ratingZoneFilter.clause}`,
+    [periodStart, periodEnd, ...ratingZoneFilter.params]
   );
   const avgRating = parseFloat(ratingResult.rows[0]?.avg_rating || "0");
 
-  // Response Rate
+  // Response Rate - zone-filtered
+  const responseZoneFilter = buildBookingZoneFilter('b', 3, selectedZones);
   const ratingsCountResult = await pool.query(
     `SELECT COUNT(DISTINCT br.booking_id) as count 
      FROM public.booking_ratings br
      INNER JOIN public.bookings b ON b.id = br.booking_id
-     WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'`,
-    [periodStart, periodEnd]
+     WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'${responseZoneFilter.clause}`,
+    [periodStart, periodEnd, ...responseZoneFilter.params]
   );
   const ratingsCount = parseInt(ratingsCountResult.rows[0]?.count || "0");
   const responseRate = bookingsCompleted > 0 ? (ratingsCount / bookingsCompleted) * 100 : 0;
@@ -448,11 +498,13 @@ export async function calculateOperationsMetrics(
     ? (stripeMetrics.netVolume / stripeMetrics.grossVolume) * 100
     : 0;
 
-  // Active Vendors
+  // Active Vendors - zone-filtered via vendor
+  const activeVendorZoneFilter = buildVendorZoneFilter('v', 3, selectedZones);
   const activeVendorsResult = await pool.query(
-    `SELECT COUNT(DISTINCT vendor_id) as count FROM public.bookings 
-     WHERE date_due >= $1 AND date_due < $2 AND status = 'done'`,
-    [periodStart, periodEnd]
+    `SELECT COUNT(DISTINCT b.vendor_id) as count FROM public.bookings b
+     INNER JOIN public.vendors v ON v.id = b.vendor_id
+     WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'${activeVendorZoneFilter.clause}`,
+    [periodStart, periodEnd, ...activeVendorZoneFilter.params]
   );
   const activeVendors = parseInt(activeVendorsResult.rows[0]?.count || "0");
 
@@ -460,27 +512,30 @@ export async function calculateOperationsMetrics(
   // Just return an empty object for now since the table doesn't exist
   const vendorLevelCounts: Record<string, number> = {};
 
-  // New Vendors (activated during period with at least 1 booking ever)
+  // New Vendors (activated during period with at least 1 booking ever) - zone-filtered
+  const newVendorZoneFilter = buildVendorZoneFilter('v', 3, selectedZones);
   const newVendorsResult = await pool.query(
     `SELECT COUNT(DISTINCT v.id) as count
      FROM public.vendors v
      INNER JOIN public.vendor_onboardings vo ON vo.vendor_id = v.id
      WHERE vo.step = 'finished' 
        AND vo.starting_date >= $1 AND vo.starting_date < $2
-       AND EXISTS (SELECT 1 FROM public.bookings b WHERE b.vendor_id = v.id AND b.status = 'done')`,
-    [periodStart, periodEnd]
+       AND EXISTS (SELECT 1 FROM public.bookings b WHERE b.vendor_id = v.id AND b.status = 'done')${newVendorZoneFilter.clause}`,
+    [periodStart, periodEnd, ...newVendorZoneFilter.params]
   );
   const newVendors = parseInt(newVendorsResult.rows[0]?.count || "0");
 
-  // Dismissed Vendors
+  // Dismissed Vendors - zone-filtered
+  const dismissedVendorZoneFilter = buildVendorZoneFilter('v', 3, selectedZones);
   const dismissedVendorsResult = await pool.query(
-    `SELECT COUNT(*) as count FROM public.vendors 
-     WHERE status = 'dismissed' AND updated_at >= $1 AND updated_at < $2`,
-    [periodStart, periodEnd]
+    `SELECT COUNT(*) as count FROM public.vendors v
+     WHERE v.status = 'dismissed' AND v.updated_at >= $1 AND v.updated_at < $2${dismissedVendorZoneFilter.clause}`,
+    [periodStart, periodEnd, ...dismissedVendorZoneFilter.params]
   );
   const dismissedVendors = parseInt(dismissedVendorsResult.rows[0]?.count || "0");
 
-  // Scheduled Hours (for non-dismissed vendors with job in last 30 days)
+  // Scheduled Hours (for non-dismissed vendors with job in last 30 days) - zone-filtered
+  const scheduledHoursVendorZoneFilter = buildVendorZoneFilter('v', 2, selectedZones);
   const scheduledHoursResult = await pool.query(
     `SELECT SUM(vs.total_minutes_effective) as total_minutes
      FROM public.vendor_schedules vs
@@ -492,13 +547,14 @@ export async function calculateOperationsMetrics(
            AND b.status = 'done' 
            AND b.date_due >= ($1::timestamp - interval '30 days')
            AND b.date_due < $1
-       )`,
-    [periodEnd]
+       )${scheduledHoursVendorZoneFilter.clause}`,
+    [periodEnd, ...scheduledHoursVendorZoneFilter.params]
   );
   const totalMinutesEffective = parseFloat(scheduledHoursResult.rows[0]?.total_minutes || "0");
   const scheduledHours = totalMinutesEffective / 60;
 
-  // Utilization
+  // Utilization - zone-filtered
+  const utilizationVendorZoneFilter = buildVendorZoneFilter('v', 2, selectedZones);
   const utilizationResult = await pool.query(
     `SELECT SUM(vs.total_minutes_worked) as worked, SUM(vs.total_minutes_effective) as effective
      FROM public.vendor_schedules vs
@@ -510,8 +566,8 @@ export async function calculateOperationsMetrics(
            AND b.status = 'done' 
            AND b.date_due >= ($1::timestamp - interval '30 days')
            AND b.date_due < $1
-       )`,
-    [periodEnd]
+       )${utilizationVendorZoneFilter.clause}`,
+    [periodEnd, ...utilizationVendorZoneFilter.params]
   );
   const totalMinutesWorked = parseFloat(utilizationResult.rows[0]?.worked || "0");
   const totalMinutesEffectiveUtil = parseFloat(utilizationResult.rows[0]?.effective || "0");

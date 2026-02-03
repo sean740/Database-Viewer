@@ -397,26 +397,21 @@ export async function calculateOperationsMetrics(
     : 0;
 
   // Defect %: rescheduling requests with vendor-related reasons + cancellations with specific reasons
-  // Count unique booking_ids, not unique row ids
-  const reschedulingDefectsResult = await pool.query(
-    `SELECT COUNT(DISTINCT booking_id) as count FROM public.rescheduling_requests 
-     WHERE requested_at >= $1 AND requested_at < $2
-       AND reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')`,
+  // Count unique booking_ids across BOTH sources (a booking in both counts only once)
+  const defectsResult = await pool.query(
+    `SELECT COUNT(DISTINCT booking_id) as count FROM (
+       SELECT booking_id FROM public.rescheduling_requests 
+       WHERE requested_at >= $1 AND requested_at < $2
+         AND reason IN ('vendor_no_availabilities', 'vendor_emergency', 'vendor_no_show', 'overbooking')
+       UNION ALL
+       SELECT cb.booking_id FROM public.cancelled_bookings cb
+       INNER JOIN public.bookings b ON b.id = cb.booking_id
+       WHERE b.date_due >= $1 AND b.date_due < $2
+         AND cb.cancel_reason_id IN (4,5,6,7,8,9,17,18)
+     ) all_defects`,
     [periodStart, periodEnd]
   );
-  const reschedulingDefects = parseInt(reschedulingDefectsResult.rows[0]?.count || "0");
-  
-  // Cancellations with reason codes 4,5,6,7,8,9,17,18 - count unique booking_ids
-  const cancellationDefectsResult = await pool.query(
-    `SELECT COUNT(DISTINCT cb.booking_id) as count FROM public.cancelled_bookings cb
-     INNER JOIN public.bookings b ON b.id = cb.booking_id
-     WHERE b.date_due >= $1 AND b.date_due < $2
-       AND cb.cancel_reason_id IN (4,5,6,7,8,9,17,18)`,
-    [periodStart, periodEnd]
-  );
-  const cancellationDefects = parseInt(cancellationDefectsResult.rows[0]?.count || "0");
-  
-  const totalDefects = reschedulingDefects + cancellationDefects;
+  const totalDefects = parseInt(defectsResult.rows[0]?.count || "0");
   const defectPercent = bookingsCompleted > 0 ? (totalDefects / bookingsCompleted) * 100 : 0;
 
   // Overbooked %

@@ -11,7 +11,7 @@ export function getSession() {
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
     conString: process.env.DATABASE_URL,
-    createTableIfMissing: false,
+    createTableIfMissing: true,
     ttl: sessionTtl,
     tableName: "sessions",
   });
@@ -41,11 +41,11 @@ export async function setupAuth(app: Express) {
         try {
           const normalizedEmail = email.toLowerCase().trim();
           const user = await authStorage.getUserByEmail(normalizedEmail);
-          
+
           if (!user || !user.password || !user.isActive) {
             return done(null, false, { message: "Invalid email or password" });
           }
-          
+
           const isMatch = await bcrypt.compare(password, user.password);
           if (!isMatch) {
             return done(null, false, { message: "Invalid email or password" });

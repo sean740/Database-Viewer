@@ -40,7 +40,7 @@ export const tableGrants = pgTable("table_grants", {
   userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   database: varchar("database").notNull(),
   tableName: varchar("table_name").notNull(),
-  grantedBy: varchar("granted_by").notNull().references(() => users.id),
+  grantedBy: integer("granted_by").notNull().references(() => users.id),
   grantedAt: timestamp("granted_at").defaultNow(),
 });
 

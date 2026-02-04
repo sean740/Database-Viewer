@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { boolean, index, jsonb, pgTable, text, timestamp, varchar, integer } from "drizzle-orm/pg-core";
 
 // User role enum type
 export type UserRole = "admin" | "washos_user" | "external_customer";
@@ -19,9 +19,9 @@ export const sessions = pgTable(
 // User storage table.
 // (IMPORTANT) This table is mandatory for Replit Auth, don't drop it.
 export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   email: varchar("email").unique().notNull(),
-  password: varchar("password"),
+  password: varchar("password_digest"),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
@@ -37,7 +37,7 @@ export type User = typeof users.$inferSelect;
 // Table grants for External Customers - which tables they can access
 export const tableGrants = pgTable("table_grants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   database: varchar("database").notNull(),
   tableName: varchar("table_name").notNull(),
   grantedBy: varchar("granted_by").notNull().references(() => users.id),

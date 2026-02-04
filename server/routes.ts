@@ -1,19 +1,20 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { Pool } from "pg";
-import OpenAI from "openai";
+import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+
 import rateLimit from "express-rate-limit";
 import { eq, and, desc, count } from "drizzle-orm";
 import { storage } from "./storage";
 import { db } from "./db";
 import { getStripeMetricsForWeek, checkStripeConnection, type StripeWeeklyMetrics } from "./stripeClient";
-import { 
-  calculateOperationsMetrics, 
-  calculateOperationsVariance, 
+import {
+  calculateOperationsMetrics,
+  calculateOperationsVariance,
   OPERATIONS_METRIC_SPECS,
   getAllOperationsMetricSpecs,
   getOperationsMetricSpec,
-  type OperationsPeriodMetrics 
+  type OperationsPeriodMetrics
 } from "./operationsMetrics";
 import {
   getCacheKey,
@@ -22,14 +23,14 @@ import {
   setInCache,
 } from "./dashboardCache";
 import { setupAuth, registerAuthRoutes, isAuthenticated, authStorage } from "./replit_integrations/auth";
-import { 
-  users, 
-  tableGrants, 
-  auditLogs, 
-  reportPages, 
-  reportBlocks, 
+import {
+  users,
+  tableGrants,
+  auditLogs,
+  reportPages,
+  reportBlocks,
   reportChatSessions,
-  type UserRole, 
+  type UserRole,
   type User,
   type ReportPage,
   type ReportBlock,
@@ -48,8 +49,8 @@ import type {
   NLQPlan,
 } from "@shared/schema";
 import {
-  getOpenAIClient,
-  AI_CONFIG,
+  getGeminiClient,
+  GEMINI_CONFIG,
   getTableDataDictionary,
   formatDataDictionaryForPrompt,
   getDateColumns,
@@ -128,7 +129,7 @@ function getPool(dbName: string): Pool {
   }
 
   // SSL configuration - verify certificates in production for security
-  const sslConfig = process.env.DB_SSL_REJECT_UNAUTHORIZED === "false" 
+  const sslConfig = process.env.DB_SSL_REJECT_UNAUTHORIZED === "false"
     ? { rejectUnauthorized: false }
     : { rejectUnauthorized: true };
 
@@ -152,7 +153,7 @@ function convertPSTDateToUTC(dateStr: string, isEndOfRange: boolean = false): st
   const dateOnlyMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (dateOnlyMatch) {
     const [, year, month, day] = dateOnlyMatch;
-    
+
     // PST is UTC-8, PDT is UTC-7
     // For simplicity, we'll use a fixed offset approach
     // Create date in PST context and convert to UTC
@@ -168,12 +169,12 @@ function convertPSTDateToUTC(dateStr: string, isEndOfRange: boolean = false): st
       return date.toISOString();
     }
   }
-  
+
   // Check if it's a datetime string (YYYY-MM-DD HH:MM:SS format) - AI often generates these
   const dateTimeMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
   if (dateTimeMatch) {
     const [, year, month, day, hour, minute, second] = dateTimeMatch;
-    
+
     // If it's 00:00:00 treat as start of day, if 23:59:59 treat as end of day
     if (hour === "00" && minute === "00" && second === "00") {
       // Start of day PST -> convert to UTC
@@ -190,7 +191,7 @@ function convertPSTDateToUTC(dateStr: string, isEndOfRange: boolean = false): st
       return date.toISOString();
     }
   }
-  
+
   // Not a recognized date format, return as-is
   return dateStr;
 }
@@ -217,7 +218,7 @@ function getOperatorSQL(
     case "lte":
       return { sql: `<= $${paramIndex}` };
     case "between":
-      return { 
+      return {
         sql: `BETWEEN $${paramIndex} AND $${paramIndex + 1}`,
         paramCount: 2,
       };
@@ -242,7 +243,7 @@ function addFilterToQuery(
   validateIdentifier(f.column, "column");
   const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
   whereClauses.push(`"${f.column}" ${opInfo.sql}`);
-  
+
   if (f.operator === "between" && Array.isArray(f.value)) {
     // For "between", convert date strings from PST to UTC
     const startValue = convertPSTDateToUTC(f.value[0], false);
@@ -274,7 +275,7 @@ function addFilterToQueryWithAlias(
 ) {
   const opInfo = getOperatorSQL(f.operator as FilterOperator, params.length + 1);
   whereClauses.push(`${f.column} ${opInfo.sql}`);
-  
+
   if (f.operator === "between" && Array.isArray(f.value)) {
     // For "between", convert date strings from PST to UTC
     const startValue = convertPSTDateToUTC(f.value[0], false);
@@ -305,16 +306,16 @@ function requireRole(...allowedRoles: UserRole[]) {
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized" });
     }
-    
+
     const user = await authStorage.getUser(userId);
     if (!user || !user.isActive) {
       return res.status(403).json({ error: "Account is inactive" });
     }
-    
+
     if (!allowedRoles.includes(user.role as UserRole)) {
       return res.status(403).json({ error: "Insufficient permissions" });
     }
-    
+
     (req as any).currentUser = user;
     next();
   };
@@ -343,8 +344,8 @@ function parseTableName(tableName: string): { schema: string; table: string } | 
 // Security: Validate table exists and user has access
 // bypassVisibility: When true, ignores visibility settings (used for AI access - visibility is cosmetic for UI only)
 async function validateTableAccess(
-  dbName: string, 
-  tableName: string, 
+  dbName: string,
+  tableName: string,
   user: User,
   options: { bypassVisibility?: boolean } = {}
 ): Promise<{ valid: boolean; error?: string; parsedTable?: { schema: string; table: string } }> {
@@ -361,7 +362,7 @@ async function validateTableAccess(
       SELECT table_name FROM information_schema.tables 
       WHERE table_schema = $1 AND table_name = $2
     `, [parsed.schema, parsed.table]);
-    
+
     if (tableResult.rows.length === 0) {
       return { valid: false, error: "Table not found" };
     }
@@ -380,7 +381,7 @@ async function validateTableAccess(
       const allSettings = await storage.getAllTableSettings();
       const settingsKey = `${dbName}:${parsed.schema}.${parsed.table}`;
       const tableSettings = allSettings[settingsKey];
-      
+
       if (tableSettings && tableSettings.isVisible === false) {
         return { valid: false, error: "Access denied to this table" };
       }
@@ -398,14 +399,14 @@ function levenshteinDistance(a: string, b: string): number {
   const matrix: number[][] = [];
   const aLower = a.toLowerCase();
   const bLower = b.toLowerCase();
-  
+
   for (let i = 0; i <= bLower.length; i++) {
     matrix[i] = [i];
   }
   for (let j = 0; j <= aLower.length; j++) {
     matrix[0][j] = j;
   }
-  
+
   for (let i = 1; i <= bLower.length; i++) {
     for (let j = 1; j <= aLower.length; j++) {
       if (bLower.charAt(i - 1) === aLower.charAt(j - 1)) {
@@ -426,7 +427,7 @@ function levenshteinDistance(a: string, b: string): number {
 function findSimilarColumns(target: string, columns: string[], maxSuggestions: number = 3): string[] {
   // Normalize target: remove underscores and lowercase for comparison
   const normalizedTarget = target.toLowerCase().replace(/_/g, "");
-  
+
   const scored = columns.map(col => {
     const normalizedCol = col.toLowerCase().replace(/_/g, "");
     // Calculate distance on normalized versions
@@ -436,7 +437,7 @@ function findSimilarColumns(target: string, columns: string[], maxSuggestions: n
     const similarity = maxLen > 0 ? 1 - (distance / maxLen) : 0;
     return { col, similarity, distance };
   });
-  
+
   // Filter to reasonable matches (similarity > 0.4 means roughly 60% different at most)
   // and sort by similarity descending
   return scored
@@ -448,8 +449,8 @@ function findSimilarColumns(target: string, columns: string[], maxSuggestions: n
 
 // Security: Validate columns exist in table
 async function validateColumns(
-  dbName: string, 
-  tableName: string, 
+  dbName: string,
+  tableName: string,
   columns: string[]
 ): Promise<{ valid: boolean; error?: string }> {
   try {
@@ -473,14 +474,14 @@ async function validateColumns(
       SELECT column_name FROM information_schema.columns 
       WHERE table_schema = $1 AND table_name = $2
     `, [parsed.schema, parsed.table]);
-    
+
     const existingColumnsArray = columnResult.rows.map((r: any) => r.column_name);
     const existingColumns = new Set(existingColumnsArray);
-    
+
     for (const col of columns) {
       if (!existingColumns.has(col)) {
         const suggestions = findSimilarColumns(col, existingColumnsArray);
-        const suggestionText = suggestions.length > 0 
+        const suggestionText = suggestions.length > 0
           ? ` Did you mean: ${suggestions.map(s => `'${s}'`).join(", ")}?`
           : "";
         return { valid: false, error: `Column not found: ${col}.${suggestionText}` };
@@ -497,7 +498,7 @@ async function validateColumns(
 // Security: Validate report block config against database metadata
 // bypassVisibility: When true, ignores visibility settings (used for AI-generated blocks)
 async function validateBlockConfig(
-  config: any, 
+  config: any,
   kind: string,
   user: User,
   options: { bypassVisibility?: boolean } = {}
@@ -525,7 +526,7 @@ async function validateBlockConfig(
   // If there's a join, validate the joined table access too
   let joinTableColumns: string[] = [];
   let mainTableColumns: string[] = [];
-  
+
   // Get main table columns for validation
   const mainParsed = parseTableName(config.table);
   if (mainParsed) {
@@ -536,27 +537,27 @@ async function validateBlockConfig(
     `, [mainParsed.schema, mainParsed.table]);
     mainTableColumns = mainColResult.rows.map((r: any) => r.column_name);
   }
-  
+
   // Track sub-join table columns separately
   let subJoinTableColumns: string[] = [];
-  
+
   if (config.join?.table) {
     const joinTableValidation = await validateTableAccess(config.database, config.join.table, user, options);
     if (!joinTableValidation.valid) {
       return { valid: false, error: `Join table access error: ${joinTableValidation.error}` };
     }
-    
+
     // Validate join "on" columns
     if (!config.join.on || config.join.on.length !== 2) {
       return { valid: false, error: "Join 'on' must specify two columns [fromColumn, toColumn]" };
     }
-    
+
     // Validate the fromColumn exists in main table
     const [fromCol, toCol] = config.join.on;
     if (!mainTableColumns.includes(fromCol)) {
       return { valid: false, error: `Join column '${fromCol}' not found in main table` };
     }
-    
+
     // Get columns from joined table
     const joinParsed = parseTableName(config.join.table);
     if (joinParsed) {
@@ -566,30 +567,30 @@ async function validateBlockConfig(
         WHERE table_schema = $1 AND table_name = $2
       `, [joinParsed.schema, joinParsed.table]);
       joinTableColumns = joinColResult.rows.map((r: any) => r.column_name);
-      
+
       // Validate the toColumn exists in joined table
       if (!joinTableColumns.includes(toCol)) {
         return { valid: false, error: `Join column '${toCol}' not found in joined table` };
       }
-      
+
       // Handle subJoin if present (nested join: main -> join -> subJoin)
       if (config.join.subJoin?.table) {
         const subJoinTableValidation = await validateTableAccess(config.database, config.join.subJoin.table, user, options);
         if (!subJoinTableValidation.valid) {
           return { valid: false, error: `SubJoin table access error: ${subJoinTableValidation.error}` };
         }
-        
+
         // Validate subJoin "on" columns
         if (!config.join.subJoin.on || config.join.subJoin.on.length !== 2) {
           return { valid: false, error: "SubJoin 'on' must specify two columns [fromColumn, toColumn]" };
         }
-        
+
         const [subFromCol, subToCol] = config.join.subJoin.on;
         // subFromCol should exist in the first join table
         if (!joinTableColumns.includes(subFromCol)) {
           return { valid: false, error: `SubJoin column '${subFromCol}' not found in join table` };
         }
-        
+
         // Get columns from subJoin table
         const subJoinParsed = parseTableName(config.join.subJoin.table);
         if (subJoinParsed) {
@@ -598,7 +599,7 @@ async function validateBlockConfig(
             WHERE table_schema = $1 AND table_name = $2
           `, [subJoinParsed.schema, subJoinParsed.table]);
           subJoinTableColumns = subJoinColResult.rows.map((r: any) => r.column_name);
-          
+
           // Validate the subToColumn exists in subJoin table
           if (!subJoinTableColumns.includes(subToCol)) {
             return { valid: false, error: `SubJoin column '${subToCol}' not found in subJoin table` };
@@ -684,7 +685,7 @@ async function validateBlockConfig(
       }
       return { valid: true };
     };
-    
+
     if (config.xColumn) {
       const result = validateChartColumn(config.xColumn);
       if (!result.valid) return { valid: false, error: result.error };
@@ -755,7 +756,7 @@ async function validateBlockConfig(
     for (const col of joinColumnsToValidate) {
       if (!joinTableColumns.includes(col)) {
         const suggestions = findSimilarColumns(col, joinTableColumns);
-        const suggestionText = suggestions.length > 0 
+        const suggestionText = suggestions.length > 0
           ? ` Did you mean: ${suggestions.map(s => `'${s}'`).join(", ")}?`
           : "";
         console.log(`[DEBUG] Join validation failed - Looking for column '${col}' in joined table '${config.join?.table}'. Available columns: [${joinTableColumns.join(', ')}]`);
@@ -763,13 +764,13 @@ async function validateBlockConfig(
       }
     }
   }
-  
+
   // Validate sub-join table columns exist
   if (subJoinColumnsToValidate.length > 0 && subJoinTableColumns.length > 0) {
     for (const col of subJoinColumnsToValidate) {
       if (!subJoinTableColumns.includes(col)) {
         const suggestions = findSimilarColumns(col, subJoinTableColumns);
-        const suggestionText = suggestions.length > 0 
+        const suggestionText = suggestions.length > 0
           ? ` Did you mean: ${suggestions.map(s => `'${s}'`).join(", ")}?`
           : "";
         console.log(`[DEBUG] SubJoin validation failed - Looking for column '${col}' in subJoin table '${config.join?.subJoin?.table}'. Available columns: [${subJoinTableColumns.join(', ')}]`);
@@ -818,7 +819,7 @@ async function logAudit(entry: {
       details: entry.details || null,
       ipAddress: entry.ip || null,
     });
-    
+
     // Also log to console for real-time monitoring
     console.log(`[AUDIT] ${new Date().toISOString()} | User: ${entry.userEmail} | Action: ${entry.action} | DB: ${entry.database || '-'} | Table: ${entry.table || '-'} | ${entry.details || ''}`);
   } catch (err) {
@@ -834,9 +835,9 @@ export async function registerRoutes(
   // Setup auth BEFORE other routes
   await setupAuth(app);
   registerAuthRoutes(app);
-  
+
   // ========== RATE LIMITING ==========
-  
+
   // General API rate limit: 100 requests per minute
   const generalLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
@@ -845,7 +846,7 @@ export async function registerRoutes(
     standardHeaders: true,
     legacyHeaders: false,
   });
-  
+
   // Stricter rate limit for auth endpoints: 10 attempts per minute
   const authLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
@@ -854,7 +855,7 @@ export async function registerRoutes(
     standardHeaders: true,
     legacyHeaders: false,
   });
-  
+
   // Rate limit for exports: 10 per minute
   const exportLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
@@ -863,7 +864,7 @@ export async function registerRoutes(
     standardHeaders: true,
     legacyHeaders: false,
   });
-  
+
   // Rate limit for NLQ: 20 per minute
   const nlqLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
@@ -872,18 +873,18 @@ export async function registerRoutes(
     standardHeaders: true,
     legacyHeaders: false,
   });
-  
+
   // Apply general rate limit to all API routes
   app.use("/api/", generalLimiter);
-  
+
   // Apply stricter limits to specific endpoints
   app.use("/api/auth/login", authLimiter);
   app.use("/api/auth/register", authLimiter);
   app.use("/api/export", exportLimiter);
   app.use("/api/nlq", nlqLimiter);
-  
+
   // ========== ADMIN ROUTES ==========
-  
+
   // Get all users (admin only)
   app.get("/api/admin/users", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
     try {
@@ -894,31 +895,31 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to fetch users" });
     }
   });
-  
+
   // Update user role/status (admin only)
   app.patch("/api/admin/users/:userId", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
       const { role, isActive, firstName, lastName, email, password } = req.body;
-      
+
       const updates: Partial<{ role: UserRole; isActive: boolean; firstName: string; lastName: string; email: string; password: string; updatedAt: Date }> = { updatedAt: new Date() };
-      
+
       if (role && ["admin", "washos_user", "external_customer"].includes(role)) {
         updates.role = role;
       }
-      
+
       if (typeof isActive === "boolean") {
         updates.isActive = isActive;
       }
-      
+
       if (typeof firstName === "string") {
         updates.firstName = firstName.trim();
       }
-      
+
       if (typeof lastName === "string") {
         updates.lastName = lastName.trim();
       }
-      
+
       if (typeof email === "string") {
         const normalizedEmail = email.toLowerCase().trim();
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -932,7 +933,7 @@ export async function registerRoutes(
         }
         updates.email = normalizedEmail;
       }
-      
+
       // Handle password update
       if (typeof password === "string" && password.length > 0) {
         if (password.length < 4) {
@@ -941,49 +942,49 @@ export async function registerRoutes(
         const bcrypt = await import("bcryptjs");
         updates.password = await bcrypt.hash(password, 10);
       }
-      
+
       const [updated] = await db.update(users).set(updates).where(eq(users.id, userId)).returning();
-      
+
       if (!updated) {
         return res.status(404).json({ error: "User not found" });
       }
-      
+
       res.json(updated);
     } catch (err) {
       console.error("Error updating user:", err);
       res.status(500).json({ error: "Failed to update user" });
     }
   });
-  
+
   // Create new user (admin only)
   app.post("/api/admin/users", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
     try {
       const { email, password, firstName, lastName, role } = req.body;
-      
+
       if (!email || !password) {
         return res.status(400).json({ error: "Email and password are required" });
       }
-      
+
       const normalizedEmail = email.toLowerCase().trim();
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(normalizedEmail)) {
         return res.status(400).json({ error: "Invalid email format" });
       }
-      
+
       if (password.length < 4) {
         return res.status(400).json({ error: "Password must be at least 4 characters" });
       }
-      
+
       const existingUser = await authStorage.getUserByEmail(normalizedEmail);
       if (existingUser) {
         return res.status(400).json({ error: "Email already exists" });
       }
-      
+
       const bcrypt = await import("bcryptjs");
       const hashedPassword = await bcrypt.hash(password, 10);
-      
+
       const validRole = ["admin", "washos_user", "external_customer"].includes(role) ? role : "external_customer";
-      
+
       const [newUser] = await db.insert(users).values({
         email: normalizedEmail,
         password: hashedPassword,
@@ -991,7 +992,7 @@ export async function registerRoutes(
         lastName: lastName?.trim(),
         role: validRole,
       }).returning();
-      
+
       const { password: _, ...userWithoutPassword } = newUser;
       res.json(userWithoutPassword);
     } catch (err) {
@@ -999,30 +1000,30 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to create user" });
     }
   });
-  
+
   // Delete user (admin only)
   app.delete("/api/admin/users/:userId", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
       const currentUserId = (req.user as any)?.id;
-      
+
       if (userId === currentUserId) {
         return res.status(400).json({ error: "Cannot delete your own account" });
       }
-      
+
       const [deleted] = await db.delete(users).where(eq(users.id, userId)).returning();
-      
+
       if (!deleted) {
         return res.status(404).json({ error: "User not found" });
       }
-      
+
       res.json({ message: "User deleted" });
     } catch (err) {
       console.error("Error deleting user:", err);
       res.status(500).json({ error: "Failed to delete user" });
     }
   });
-  
+
   // Get table grants for a user (admin/washos)
   app.get("/api/admin/grants/:userId", isAuthenticated, requireRole("admin", "washos_user"), async (req: Request, res: Response) => {
     try {
@@ -1034,31 +1035,31 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to fetch grants" });
     }
   });
-  
+
   // Add table grant for a user (admin/washos)
   app.post("/api/admin/grants", isAuthenticated, requireRole("admin", "washos_user"), async (req: Request, res: Response) => {
     try {
       const { userId, database, tableName } = req.body;
       const grantedBy = (req.user as any)?.id;
-      
+
       if (!userId || !database || !tableName) {
         return res.status(400).json({ error: "userId, database, and tableName are required" });
       }
-      
+
       const [grant] = await db.insert(tableGrants).values({
         userId,
         database,
         tableName,
         grantedBy,
       }).returning();
-      
+
       res.json(grant);
     } catch (err) {
       console.error("Error creating grant:", err);
       res.status(500).json({ error: "Failed to create grant" });
     }
   });
-  
+
   // Delete table grant (admin/washos)
   app.delete("/api/admin/grants/:grantId", isAuthenticated, requireRole("admin", "washos_user"), async (req: Request, res: Response) => {
     try {
@@ -1077,7 +1078,7 @@ export async function registerRoutes(
       const { limit = "100", offset = "0", userId, action } = req.query;
       const limitNum = Math.min(parseInt(limit as string) || 100, 1000);
       const offsetNum = parseInt(offset as string) || 0;
-      
+
       // Build where conditions for SQL filtering
       const conditions = [];
       if (userId) {
@@ -1086,14 +1087,14 @@ export async function registerRoutes(
       if (action) {
         conditions.push(eq(auditLogs.action, action as string));
       }
-      
+
       // Get total count with filters
       let countQuery = db.select({ count: count() }).from(auditLogs);
       if (conditions.length > 0) {
         countQuery = countQuery.where(and(...conditions)) as typeof countQuery;
       }
       const [{ count: total }] = await countQuery;
-      
+
       // Get paginated logs with filters - most recent first
       let logsQuery = db.select().from(auditLogs);
       if (conditions.length > 0) {
@@ -1103,7 +1104,7 @@ export async function registerRoutes(
         .orderBy(desc(auditLogs.timestamp))
         .limit(limitNum)
         .offset(offsetNum);
-      
+
       res.json({
         logs,
         total: Number(total),
@@ -1143,24 +1144,24 @@ export async function registerRoutes(
   app.post("/api/admin/table-settings", isAuthenticated, requireRole("admin"), async (req: Request, res: Response) => {
     try {
       const { database, tableName, isVisible, displayName, hiddenColumns } = req.body;
-      
+
       if (!database || !tableName) {
         return res.status(400).json({ error: "database and tableName are required" });
       }
-      
+
       await storage.setTableSettings(database, tableName, {
         isVisible: isVisible !== false,
         displayName: displayName || null,
         hiddenColumns: Array.isArray(hiddenColumns) ? hiddenColumns : undefined,
       });
-      
+
       res.json({ success: true });
     } catch (err) {
       console.error("Error updating table settings:", err);
       res.status(500).json({ error: "Failed to update table settings" });
     }
   });
-  
+
   // Get current user with role info
   app.get("/api/auth/me", isAuthenticated, async (req: Request, res: Response) => {
     try {
@@ -1196,11 +1197,11 @@ export async function registerRoutes(
       const { database } = req.params;
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      
+
       if (!user || !user.isActive) {
         return res.status(403).json({ error: "Account is inactive" });
       }
-      
+
       const pool = getPool(database);
       const allTableSettings = await storage.getAllTableSettings();
 
@@ -1224,13 +1225,13 @@ export async function registerRoutes(
           isVisible: settings?.isVisible !== false,
         };
       });
-      
+
       // For external customers, filter to only granted tables
       if (user.role === "external_customer") {
         const allowedTables = await getAllowedTables(userId);
         tables = tables.filter(t => allowedTables.includes(`${database}:${t.fullName}`));
       }
-      
+
       // For non-admins, filter out hidden tables
       if (user.role !== "admin") {
         tables = tables.filter(t => t.isVisible !== false);
@@ -1252,7 +1253,7 @@ export async function registerRoutes(
     async (req: Request, res: Response) => {
       try {
         const { database, fullTable } = req.params;
-        
+
         // Check table access for external customers
         const userId = (req.user as any)?.id;
         const user = await authStorage.getUser(userId);
@@ -1262,7 +1263,7 @@ export async function registerRoutes(
             return res.status(403).json({ error: "You don't have access to this table" });
           }
         }
-        
+
         const [schema, table] = fullTable.split(".");
         if (!schema || !table) {
           return res.status(400).json({ error: "Invalid table name format. Expected schema.table" });
@@ -1347,7 +1348,7 @@ export async function registerRoutes(
     try {
       const userId = (req.user as any)?.id;
       const { database, table } = req.params;
-      
+
       if (!userId) {
         return res.status(401).json({ error: "Not authenticated" });
       }
@@ -1365,7 +1366,7 @@ export async function registerRoutes(
     try {
       const userId = (req.user as any)?.id;
       const { database, table, filters } = req.body;
-      
+
       if (!userId) {
         return res.status(401).json({ error: "Not authenticated" });
       }
@@ -1387,7 +1388,7 @@ export async function registerRoutes(
     try {
       const userId = (req.user as any)?.id;
       const { id } = req.params;
-      
+
       if (!userId) {
         return res.status(401).json({ error: "Not authenticated" });
       }
@@ -1407,7 +1408,7 @@ export async function registerRoutes(
   app.post("/api/rows", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const { database, table, page = 1, filters = [], sort } = req.body;
-      
+
       // Check table access for external customers
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
@@ -1455,7 +1456,7 @@ export async function registerRoutes(
       // Determine ORDER BY - use user-specified sort or default to primary key
       // Support multi-column sorting (sort is now an array)
       let orderByClause: string;
-      
+
       if (sort && Array.isArray(sort) && sort.length > 0) {
         // Multi-column sort
         const sortParts: string[] = [];
@@ -1491,7 +1492,7 @@ export async function registerRoutes(
 
         const op = getOperatorSQL(filter.operator, paramIndex);
         whereClauses.push(`"${filter.column}" ${op.sql}`);
-        
+
         // Handle between operator (needs 2 params) and date conversion
         if (filter.operator === "between" && Array.isArray(filter.value)) {
           const startValue = convertPSTDateToUTC(filter.value[0], false);
@@ -1575,7 +1576,7 @@ export async function registerRoutes(
 
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      
+
       // Check table access for external customers
       if (user?.role === "external_customer") {
         const allowedTables = await getAllowedTables(userId);
@@ -1592,7 +1593,7 @@ export async function registerRoutes(
 
       // Parse and validate filters
       const activeFilters: ActiveFilter[] = filters || [];
-      
+
       // Validate columns
       const columnsResult = await pool.query(
         `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`,
@@ -1612,7 +1613,7 @@ export async function registerRoutes(
         }
         const op = getOperatorSQL(filter.operator, paramIndex);
         whereClauses.push(`"${filter.column}" ${op.sql}`);
-        
+
         // Handle between operator (needs 2 params) and date conversion
         if (filter.operator === "between" && Array.isArray(filter.value)) {
           const startValue = convertPSTDateToUTC(filter.value[0], false);
@@ -1671,7 +1672,7 @@ export async function registerRoutes(
       if (!database || !table) {
         return res.status(400).json({ error: "Database and table are required" });
       }
-      
+
       // Check table access for external customers
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
@@ -1742,7 +1743,7 @@ export async function registerRoutes(
 
         const op = getOperatorSQL(filter.operator, paramIndex);
         whereClauses.push(`"${filter.column}" ${op.sql}`);
-        
+
         // Handle between operator (needs 2 params) and date conversion
         if (filter.operator === "between" && Array.isArray(filter.value)) {
           const startValue = convertPSTDateToUTC(filter.value[0], false);
@@ -1840,7 +1841,7 @@ export async function registerRoutes(
         const client = await pool.connect();
         const cursorName = `export_cursor_${Date.now()}`;
         let transactionStarted = false;
-        
+
         try {
           // Create a cursor for streaming large result sets
           await client.query("BEGIN");
@@ -1891,7 +1892,7 @@ export async function registerRoutes(
         action: isExportAll ? "EXPORT_ALL" : "EXPORT_PAGE",
         database: database as string,
         table: table as string,
-        details: isExportAll 
+        details: isExportAll
           ? `Exported ${exportTotalCount} rows${filters.length > 0 ? `, ${filters.length} filters applied` : ''}`
           : `Exported page ${pageNum}${filters.length > 0 ? `, ${filters.length} filters applied` : ''}`,
         ip: req.ip || req.socket.remoteAddress,
@@ -1910,7 +1911,7 @@ export async function registerRoutes(
 
   // NLQ status
   app.get("/api/nlq/status", isAuthenticated, (req: Request, res: Response) => {
-    const client = getOpenAIClient();
+    const client = getGeminiClient();
     res.json({ enabled: client !== null });
   });
 
@@ -1919,7 +1920,7 @@ export async function registerRoutes(
     try {
       const { database, query, table: currentTable, context } = req.body;
 
-      const client = getOpenAIClient();
+      const client = getGeminiClient();
       if (!client) {
         return res.status(400).json({ error: "Natural language queries are not enabled" });
       }
@@ -1931,7 +1932,7 @@ export async function registerRoutes(
       if (!currentTable) {
         return res.status(400).json({ error: "Please select a table first" });
       }
-      
+
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
       if (user?.role === "external_customer") {
@@ -1943,9 +1944,9 @@ export async function registerRoutes(
 
       const pool = getPool(database);
       const [schema, tableName] = currentTable.split(".");
-      
+
       const dictionary = await getTableDataDictionary(pool, database, schema, tableName);
-      
+
       let columnsWithTypes: Array<{ name: string; dataType: string }> = [];
       if (dictionary) {
         columnsWithTypes = dictionary.columns.map(c => ({ name: c.name, dataType: c.dataType }));
@@ -1965,7 +1966,7 @@ export async function registerRoutes(
         .filter((c) => c.dataType.includes("date") || c.dataType.includes("timestamp"))
         .map((c) => c.name);
 
-      const semanticResolution = dictionary 
+      const semanticResolution = dictionary
         ? resolveSemanticReference(query, dictionary.columns)
         : { resolvedColumn: null, type: null, needsClarification: false };
 
@@ -1978,21 +1979,28 @@ export async function registerRoutes(
       });
 
       const makeRequest = async () => {
-        const response = await client.chat.completions.create({
-          model: AI_CONFIG.nlq.model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: query },
-          ],
-          max_completion_tokens: AI_CONFIG.nlq.maxTokens,
-          temperature: AI_CONFIG.nlq.temperature,
+        const model = client.getGenerativeModel({
+          model: GEMINI_CONFIG.modelName,
+          generationConfig: {
+            responseMimeType: "application/json",
+            ...GEMINI_CONFIG.generationConfig
+          }
         });
-        return response.choices[0]?.message?.content || "{}";
+
+        const chat = model.startChat({
+          history: [
+            { role: "user", parts: [{ text: systemPrompt }] },
+            { role: "model", parts: [{ text: "Understood. I will generate the JSON response." }] }
+          ]
+        });
+
+        const result = await chat.sendMessage(query);
+        return result.response.text();
       };
 
       const content = await makeRequest();
       const validColumns = columnsWithTypes.map((c) => c.name);
-      
+
       const parseResult = await parseAndValidateNLQResponse(
         content,
         currentTable,
@@ -2031,7 +2039,7 @@ export async function registerRoutes(
     try {
       const { database, table: currentTable, filters, context } = req.body;
 
-      const client = getOpenAIClient();
+      const client = getGeminiClient();
       if (!client) {
         return res.status(400).json({ error: "Natural language queries are not enabled" });
       }
@@ -2039,6 +2047,7 @@ export async function registerRoutes(
       if (!currentTable || !database || !filters || !Array.isArray(filters)) {
         return res.status(400).json({ error: "Missing required parameters" });
       }
+
 
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
@@ -2048,6 +2057,16 @@ export async function registerRoutes(
           return res.status(403).json({ error: "You don't have access to this table" });
         }
       }
+
+
+
+
+
+      // ... (rest of sampling logic omitted effectively, need to be careful with targeting) ...
+      // Instead of replacing the whole block including sampling logic which I don't want to break,
+      // I will target the makeRequest function specifically which is safer.
+
+
 
       const pool = getPool(database);
       const [schema, tableName] = currentTable.split(".");
@@ -2172,16 +2191,23 @@ export async function registerRoutes(
       });
 
       const makeRequest = async () => {
-        const response = await client.chat.completions.create({
-          model: AI_CONFIG.smartFollowup.model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: "Help me understand why my query returned no results and suggest alternatives." },
-          ],
-          max_completion_tokens: AI_CONFIG.smartFollowup.maxTokens,
-          temperature: AI_CONFIG.smartFollowup.temperature,
+        const model = client.getGenerativeModel({
+          model: GEMINI_CONFIG.modelName,
+          generationConfig: {
+            responseMimeType: "application/json",
+            ...GEMINI_CONFIG.generationConfig
+          }
         });
-        return response.choices[0]?.message?.content || "{}";
+
+        const chat = model.startChat({
+          history: [
+            { role: "user", parts: [{ text: systemPrompt }] },
+            { role: "model", parts: [{ text: "Understood. I will generate the JSON response." }] }
+          ]
+        });
+
+        const result = await chat.sendMessage("Help me understand why my query returned no results and suggest alternatives.");
+        return result.response.text();
       };
 
       const content = await makeRequest();
@@ -2206,7 +2232,7 @@ export async function registerRoutes(
   });
 
   // ========== REPORT API ENDPOINTS ==========
-  
+
   // Rate limiter for report operations
   const reportLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -2215,7 +2241,7 @@ export async function registerRoutes(
     standardHeaders: true,
     legacyHeaders: false,
   });
-  
+
   // Rate limiter for AI report operations
   const reportAILimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -2584,7 +2610,7 @@ export async function registerRoutes(
 
   // Execute a report block query (with safety guardrails and pagination)
   const REPORT_BLOCK_PAGE_SIZE = 50;
-  
+
   app.post("/api/reports/blocks/:id/run", isAuthenticated, reportLimiter, async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
@@ -2618,7 +2644,7 @@ export async function registerRoutes(
       }
 
       const config = block.config as TableBlockConfig | ChartBlockConfig | MetricBlockConfig;
-      
+
       // Security: Comprehensive validation before executing any query
       // My Reports is AI-assisted, so bypass visibility - visibility is cosmetic for UI only
       const validation = await validateBlockConfig(config, block.kind, user, { bypassVisibility: true });
@@ -2627,9 +2653,9 @@ export async function registerRoutes(
         const statusCode = validation.error?.includes("Access denied") ? 403 : 400;
         return res.status(statusCode).json({ error: validation.error });
       }
-      
+
       const pool = getPool(config.database);
-      
+
       // Parse table name to get schema and table
       const parsedTable = parseTableName(config.table);
       if (!parsedTable) {
@@ -2645,12 +2671,12 @@ export async function registerRoutes(
         const mainAlias = "t1";
         const joinAlias = "t2";
         const subJoinAlias = "t3";
-        
+
         // Helper to determine if a column reference is for subJoin table
         const isSubJoinColumn = (prefix: string): boolean => {
           return prefix.includes("_") || prefix.toLowerCase().includes("district") || prefix.toLowerCase().includes("sub");
         };
-        
+
         // Build column list with proper table aliases for joins
         let columns: string;
         if (tableConfig.columns?.length > 0) {
@@ -2673,9 +2699,9 @@ export async function registerRoutes(
         } else {
           columns = `${mainAlias}.*`;
         }
-        
+
         query = `SELECT ${columns} FROM ${tableRef} AS ${mainAlias}`;
-        
+
         // Add JOIN if specified
         if (tableConfig.join?.table) {
           const joinParsed = parseTableName(tableConfig.join.table);
@@ -2688,7 +2714,7 @@ export async function registerRoutes(
           validateIdentifier(fromCol, "column");
           validateIdentifier(toCol, "column");
           query += ` ${joinType} ${joinTableRef} AS ${joinAlias} ON ${mainAlias}."${fromCol}" = ${joinAlias}."${toCol}"`;
-          
+
           // Add subJoin if specified (nested join: main -> join -> subJoin)
           if (tableConfig.join.subJoin?.table) {
             const subJoinParsed = parseTableName(tableConfig.join.subJoin.table);
@@ -2703,7 +2729,7 @@ export async function registerRoutes(
             query += ` ${subJoinType} ${subJoinTableRef} AS ${subJoinAlias} ON ${joinAlias}."${subFromCol}" = ${subJoinAlias}."${subToCol}"`;
           }
         }
-        
+
         // Add filters (handle join columns with dots)
         if (tableConfig.filters?.length > 0) {
           const whereClauses: string[] = [];
@@ -2727,7 +2753,7 @@ export async function registerRoutes(
           });
           query += ` WHERE ${whereClauses.join(" AND ")}`;
         }
-        
+
         // Build base query for counting
         let baseQuery = `FROM ${tableRef} AS ${mainAlias}`;
         if (tableConfig.join?.table) {
@@ -2737,7 +2763,7 @@ export async function registerRoutes(
             const joinType = tableConfig.join.type === "inner" ? "INNER JOIN" : "LEFT JOIN";
             const [fromCol, toCol] = tableConfig.join.on;
             baseQuery += ` ${joinType} ${joinTableRef} AS ${joinAlias} ON ${mainAlias}."${fromCol}" = ${joinAlias}."${toCol}"`;
-            
+
             // Add subJoin to base query if specified
             if (tableConfig.join.subJoin?.table) {
               const subJoinParsed = parseTableName(tableConfig.join.subJoin.table);
@@ -2753,14 +2779,14 @@ export async function registerRoutes(
         if (tableConfig.filters?.length > 0) {
           baseQuery += ` WHERE ${query.split(" WHERE ")[1]?.split(" ORDER BY ")[0] || "1=1"}`;
         }
-        
+
         // Get total count
         const countResult = await pool.query(`SELECT COUNT(*) as count ${baseQuery}`, params);
         const totalCount = parseInt(countResult.rows[0]?.count || "0");
         const totalPages = Math.max(1, Math.ceil(totalCount / REPORT_BLOCK_PAGE_SIZE));
         const safePage = Math.min(Math.max(1, currentPage), totalPages);
         const offset = (safePage - 1) * REPORT_BLOCK_PAGE_SIZE;
-        
+
         // Add order by (handle join columns with dots)
         if (tableConfig.orderBy && typeof tableConfig.orderBy === 'object' && !Array.isArray(tableConfig.orderBy) && tableConfig.orderBy.column) {
           let orderColumnRef: string;
@@ -2778,64 +2804,64 @@ export async function registerRoutes(
           }
           query += ` ORDER BY ${orderColumnRef} ${tableConfig.orderBy.direction === "desc" ? "DESC" : "ASC"}`;
         }
-        
+
         // Add pagination or export limit
         if (exportAll) {
           query += ` LIMIT ${MAX_EXPORT_ROWS}`;
         } else {
           query += ` LIMIT ${REPORT_BLOCK_PAGE_SIZE} OFFSET ${offset}`;
         }
-        
+
         const result = await pool.query(query, params);
-        
+
         await logAudit({
           userId,
           userEmail: user.email,
           action: exportAll ? "REPORT_EXPORT" : "REPORT_QUERY",
           database: config.database,
           table: config.table,
-          details: exportAll 
+          details: exportAll
             ? `Table block export: ${result.rows.length} rows${tableConfig.join ? ` (joined with ${tableConfig.join.table})` : ''}`
             : `Table block query: page ${safePage} of ${totalPages} (${result.rows.length} rows)${tableConfig.join ? ` (joined with ${tableConfig.join.table})` : ''}`,
           ip: req.ip || req.socket.remoteAddress,
         });
-        
-        res.json({ 
-          type: "table", 
-          rows: result.rows, 
+
+        res.json({
+          type: "table",
+          rows: result.rows,
           rowCount: result.rows.length,
           totalCount,
           page: exportAll ? 1 : safePage,
           pageSize: exportAll ? result.rows.length : REPORT_BLOCK_PAGE_SIZE,
           totalPages: exportAll ? 1 : totalPages
         });
-        
+
       } else if (block.kind === "chart") {
         const chartConfig = config as ChartBlockConfig;
         validateIdentifier(chartConfig.xColumn, "column");
         validateIdentifier(chartConfig.yColumn, "column");
-        
+
         let selectPart: string;
         if (chartConfig.aggregateFunction && chartConfig.groupBy) {
           const aggFunc = chartConfig.aggregateFunction.toUpperCase();
           if (!["COUNT", "SUM", "AVG", "MIN", "MAX"].includes(aggFunc)) {
             return res.status(400).json({ error: "Invalid aggregate function" });
           }
-          
+
           // Handle special date-based grouping
           const dateGroupByValues = ["month", "year", "day", "week", "quarter"];
           const isDateGroupBy = dateGroupByValues.includes(chartConfig.groupBy.toLowerCase());
-          
+
           let groupByExpr: string;
           let labelExpr: string;
-          
+
           if (isDateGroupBy) {
             // Use xColumn as the date column for date-based grouping
             // Convert to Pacific Time before grouping so dates align with user expectations
             const dateCol = `"${chartConfig.xColumn}"`;
             const dateColPST = `(${dateCol} AT TIME ZONE 'UTC' AT TIME ZONE 'America/Los_Angeles')`;
             const datePart = chartConfig.groupBy.toLowerCase();
-            
+
             if (datePart === "month") {
               labelExpr = `TO_CHAR(${dateColPST}, 'YYYY-MM')`;
               groupByExpr = labelExpr;
@@ -2860,10 +2886,10 @@ export async function registerRoutes(
             labelExpr = `"${chartConfig.groupBy}"`;
             groupByExpr = `"${chartConfig.groupBy}"`;
           }
-          
+
           selectPart = `${labelExpr} as label, ${aggFunc}("${chartConfig.yColumn}") as value`;
           query = `SELECT ${selectPart} FROM ${tableRef}`;
-          
+
           // Add filters
           if (chartConfig.filters?.length > 0) {
             const whereClauses: string[] = [];
@@ -2872,12 +2898,12 @@ export async function registerRoutes(
             });
             query += ` WHERE ${whereClauses.join(" AND ")}`;
           }
-          
+
           query += ` GROUP BY ${groupByExpr} ORDER BY ${groupByExpr} LIMIT 500`;
         } else {
           selectPart = `"${chartConfig.xColumn}" as label, "${chartConfig.yColumn}" as value`;
           query = `SELECT ${selectPart} FROM ${tableRef}`;
-          
+
           // Add filters
           if (chartConfig.filters?.length > 0) {
             const whereClauses: string[] = [];
@@ -2886,12 +2912,12 @@ export async function registerRoutes(
             });
             query += ` WHERE ${whereClauses.join(" AND ")}`;
           }
-          
+
           query += ` LIMIT 500`;
         }
-        
+
         const result = await pool.query(query, params);
-        
+
         await logAudit({
           userId,
           userEmail: user.email,
@@ -2901,27 +2927,27 @@ export async function registerRoutes(
           details: `Chart block query: ${result.rows.length} data points`,
           ip: req.ip || req.socket.remoteAddress,
         });
-        
-        res.json({ 
-          type: "chart", 
+
+        res.json({
+          type: "chart",
           chartType: chartConfig.chartType,
           data: result.rows,
         });
-        
+
       } else if (block.kind === "metric") {
         const metricConfig = config as MetricBlockConfig;
-        
+
         const aggFunc = metricConfig.aggregateFunction.toUpperCase();
         if (!["COUNT", "SUM", "AVG", "MIN", "MAX"].includes(aggFunc)) {
           return res.status(400).json({ error: "Invalid aggregate function" });
         }
-        
+
         // Handle JOIN if present
         const mainAlias = "m";
         const joinAlias = "joined";
         let fromClause = `${tableRef} AS ${mainAlias}`;
         let columnRef: string;
-        
+
         // Determine if column is from joined table (e.g., "joined.price")
         if (metricConfig.column.includes(".")) {
           const parts = metricConfig.column.split(".");
@@ -2930,19 +2956,19 @@ export async function registerRoutes(
           }
           const [prefix, colName] = parts;
           validateIdentifier(colName, "column");
-          
+
           // Check if we have a join config
           if (!(metricConfig as any).join) {
             return res.status(400).json({ error: "Cannot use dotted column reference without join config" });
           }
-          
+
           // Use the join alias
           columnRef = `${joinAlias}."${colName}"`;
         } else {
           validateIdentifier(metricConfig.column, "column");
           columnRef = `${mainAlias}."${metricConfig.column}"`;
         }
-        
+
         // Build JOIN if present
         if ((metricConfig as any).join?.table) {
           const joinConfig = (metricConfig as any).join;
@@ -2957,18 +2983,18 @@ export async function registerRoutes(
           validateIdentifier(toCol, "column");
           fromClause += ` ${joinType} ${joinTableRef} AS ${joinAlias} ON ${mainAlias}."${fromCol}" = ${joinAlias}."${toCol}"`;
         }
-        
+
         query = `SELECT ${aggFunc}(${columnRef}) as value FROM ${fromClause}`;
-        
+
         // Add filters (need to handle aliased columns)
         if (metricConfig.filters?.length > 0) {
           const whereClauses: string[] = [];
           metricConfig.filters.forEach((f) => {
             // For filters, use main alias for non-dotted columns
-            const filterCol = f.column.includes(".") 
+            const filterCol = f.column.includes(".")
               ? `${f.column.split(".")[0]}."${f.column.split(".")[1]}"`
               : `${mainAlias}."${f.column}"`;
-            
+
             const paramIndex = params.length + 1;
             if (f.operator === "eq") {
               whereClauses.push(`${filterCol} = $${paramIndex}`);
@@ -2998,9 +3024,9 @@ export async function registerRoutes(
           });
           query += ` WHERE ${whereClauses.join(" AND ")}`;
         }
-        
+
         const result = await pool.query(query, params);
-        
+
         await logAudit({
           userId,
           userEmail: user.email,
@@ -3010,7 +3036,7 @@ export async function registerRoutes(
           details: `Metric block query: ${metricConfig.aggregateFunction}(${metricConfig.column})`,
           ip: req.ip || req.socket.remoteAddress,
         });
-        
+
         res.json({
           type: "metric",
           value: result.rows[0]?.value || 0,
@@ -3081,7 +3107,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Report page not found" });
       }
 
-      const client = getOpenAIClient();
+      const client = getGeminiClient();
       if (!client) {
         return res.status(503).json({ error: "AI service not available" });
       }
@@ -3089,7 +3115,7 @@ export async function registerRoutes(
       // Get available tables with columns for context
       const dbs = getDatabaseConnections();
       let availableTablesWithColumns: { database: string; tables: Array<TableInfo & { columns: string[] }> }[] = [];
-      
+
       for (const dbConn of dbs) {
         try {
           const pool = getPool(dbConn.name);
@@ -3099,34 +3125,34 @@ export async function registerRoutes(
             WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
             ORDER BY table_name
           `);
-          
+
           const allSettings = await storage.getAllTableSettings();
           let tables: Array<TableInfo & { columns: string[] }> = [];
-          
+
           // For external customers, get their allowed tables list once
-          const allowedTables = user.role === "external_customer" 
-            ? await getAllowedTables(userId) 
+          const allowedTables = user.role === "external_customer"
+            ? await getAllowedTables(userId)
             : null;
-          
+
           for (const t of tableResult.rows) {
             const fullName = `${t.schema}.${t.name}`;
             const settingsKey = `${dbConn.name}:${fullName}`;
             const isVisible = allSettings[settingsKey]?.isVisible ?? true;
-            
+
             // External customers are limited to their granted tables only
             // (this is a real permission, not cosmetic visibility)
             if (allowedTables && !allowedTables.includes(`${dbConn.name}:${fullName}`)) continue;
-            
+
             // NOTE: We do NOT skip tables based on isVisible for AI
             // Visibility is cosmetic for the UI only - AI has full access to all tables
-            
+
             // Fetch columns for this table
             const columnResult = await pool.query(`
               SELECT column_name FROM information_schema.columns
               WHERE table_schema = $1 AND table_name = $2
               ORDER BY ordinal_position
             `, [t.schema, t.name]);
-            
+
             tables.push({
               schema: t.schema,
               name: t.name,
@@ -3168,14 +3194,14 @@ export async function registerRoutes(
 
       // Get current date for relative date references (in Pacific Time)
       const today = new Date();
-      const pacificFormatter = new Intl.DateTimeFormat('en-CA', { 
-        timeZone: 'America/Los_Angeles', 
-        year: 'numeric', 
-        month: '2-digit', 
-        day: '2-digit' 
+      const pacificFormatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Los_Angeles',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
       });
       const todayStr = pacificFormatter.format(today); // YYYY-MM-DD format in PST/PDT
-      
+
       const systemPrompt = `You are a helpful report building assistant. You help users create custom reports with tables, charts, and metrics.
 
 IMPORTANT: Today's date is ${todayStr} (Pacific Time - PST/PDT). Use this for any relative date references like "yesterday", "last week", "this month", etc. All date/time queries should be interpreted in Pacific Time.
@@ -3183,11 +3209,11 @@ IMPORTANT: Today's date is ${todayStr} (Pacific Time - PST/PDT). Use this for an
 IMPORTANT: You MUST only use the exact column names listed below. Do NOT guess or invent column names.
 
 AVAILABLE TABLES AND COLUMNS:
-${availableTablesWithColumns.map(db => 
-  `Database: ${db.database}\n${db.tables.map(t => 
-    `  - ${t.displayName || t.name} (${t.fullName})\n    Columns: ${t.columns.slice(0, 20).join(", ")}${t.columns.length > 20 ? ` (and ${t.columns.length - 20} more)` : ""}`
-  ).join("\n")}`
-).join("\n\n")}
+${availableTablesWithColumns.map(db =>
+        `Database: ${db.database}\n${db.tables.map(t =>
+          `  - ${t.displayName || t.name} (${t.fullName})\n    Columns: ${t.columns.slice(0, 20).join(", ")}${t.columns.length > 20 ? ` (and ${t.columns.length - 20} more)` : ""}`
+        ).join("\n")}`
+      ).join("\n\n")}
 
 CURRENT REPORT: "${page.title}"
 CURRENT BLOCKS: ${blocks.length === 0 ? "None yet" : blocks.map(b => `${b.kind}: ${b.title || "Untitled"}`).join(", ")}
@@ -3265,17 +3291,27 @@ If you're just providing information or need clarification, respond with plain t
 IMPORTANT: If you cannot create a block because the request is unclear, you don't have enough information, or you're unsure which columns/tables to use, you MUST ask the user a clarifying question. Never leave the user without a response - either create a block OR ask a specific question to help you understand what they need.
 Always be helpful and explain your suggestions in simple terms.`;
 
-      const response = await client.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages.slice(-10).map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
-        ],
-        max_completion_tokens: 1000,
-        temperature: 0.7,
+      const model = client.getGenerativeModel({
+        model: GEMINI_CONFIG.modelName,
+        generationConfig: {
+          responseMimeType: "application/json",
+          ...GEMINI_CONFIG.generationConfig
+        }
       });
 
-      let assistantMessage = response.choices[0]?.message?.content || "I'm sorry, I couldn't process that request.";
+      const chat = model.startChat({
+        history: [
+          { role: "user", parts: [{ text: systemPrompt }] },
+          { role: "model", parts: [{ text: "Understood. I will generate JSON configurations for data visualization." }] }
+        ]
+      });
+
+      const result = await chat.sendMessage(message);
+      const responseText = result.response.text();
+
+      // Similar to OpenAI response handling
+      let assistantMessage = responseText;
+
 
       messages.push({
         role: "assistant",
@@ -3309,24 +3345,24 @@ Always be helpful and explain your suggestions in simple terms.`;
           displayMessage = assistantMessage.replace(jsonMatch[0], "").trim();
           // Clean up any leftover markdown code block markers
           displayMessage = displayMessage.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-          
+
           const validKinds = ["table", "chart", "metric", "text"];
-          
+
           // Helper function to validate a single block
           // AI bypasses visibility settings - visibility is cosmetic for UI only
           const validateSingleBlock = async (block: any) => {
             if (!validKinds.includes(block.kind)) return null;
-            
+
             const config = {
               ...block.config,
               database: block.config?.database || "Default",
               rowLimit: Math.min(block.config?.rowLimit || 500, 10000),
               filters: block.config?.filters || [],
             };
-            
+
             // AI-generated blocks bypass visibility (external customer grants are still enforced)
             const validation = await validateBlockConfig(config, block.kind, user, { bypassVisibility: true });
-            
+
             if (validation.valid) {
               return {
                 kind: block.kind,
@@ -3338,7 +3374,7 @@ Always be helpful and explain your suggestions in simple terms.`;
               return { error: validation.error };
             }
           };
-          
+
           // Handle single block creation
           if (action?.action === "create_block" && action?.block) {
             const result = await validateSingleBlock(action.block);
@@ -3352,12 +3388,12 @@ Always be helpful and explain your suggestions in simple terms.`;
               displayMessage += `\n\n**Note:** I wasn't able to create this block because: ${result.error}. Please try rephrasing your request or ask me which columns are available in the table you want to use.`;
             }
           }
-          
+
           // Handle multiple blocks creation (for comparisons)
           if (action?.action === "create_blocks" && Array.isArray(action?.blocks)) {
             const validatedBlocks: any[] = [];
             const errors: string[] = [];
-            
+
             for (const block of action.blocks) {
               const result = await validateSingleBlock(block);
               if (result && !('error' in result)) {
@@ -3366,7 +3402,7 @@ Always be helpful and explain your suggestions in simple terms.`;
                 errors.push(result.error);
               }
             }
-            
+
             if (validatedBlocks.length > 0) {
               validatedAction = {
                 action: "create_blocks",
@@ -3374,7 +3410,7 @@ Always be helpful and explain your suggestions in simple terms.`;
                 explanation: action.explanation || "",
               };
             }
-            
+
             if (errors.length > 0) {
               displayMessage += `\n\n**Note:** Some blocks could not be created: ${errors.join("; ")}. Please try rephrasing your request.`;
             }
@@ -3392,7 +3428,7 @@ Always be helpful and explain your suggestions in simple terms.`;
       } else if (validatedAction?.explanation && !finalMessage.includes(validatedAction.explanation)) {
         finalMessage = finalMessage ? `${finalMessage}\n\n${validatedAction.explanation}` : validatedAction.explanation;
       }
-      
+
       res.json({
         message: finalMessage || "I've created the block for you.",
         action: validatedAction,
@@ -3408,14 +3444,14 @@ Always be helpful and explain your suggestions in simple terms.`;
     try {
       const { database } = req.params;
       const pool = getPool(database);
-      
+
       const result = await pool.query(`
         SELECT DISTINCT abbreviation as zone
         FROM public.districts
         WHERE abbreviation IS NOT NULL AND abbreviation != ''
         ORDER BY abbreviation
       `);
-      
+
       res.json(result.rows.map(r => r.zone));
     } catch (err) {
       console.error("Error fetching zones:", err);
@@ -3432,14 +3468,14 @@ Always be helpful and explain your suggestions in simple terms.`;
       const forceRefresh = req.query.refresh === "true";
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      
+
       if (!user) {
         return res.status(401).json({ error: "Unauthorized" });
       }
-      
+
       // Parse zones filter (comma-separated list of zone abbreviations)
       const selectedZones = zonesParam ? zonesParam.split(',').filter(z => z.trim()) : [];
-      
+
       // Check cache first (unless force refresh)
       const cacheKey = getCacheKey("marketing", database, periodType, undefined, selectedZones);
       if (!forceRefresh) {
@@ -3450,9 +3486,9 @@ Always be helpful and explain your suggestions in simple terms.`;
         }
       }
       console.log(`[Cache MISS] Marketing dashboard: ${cacheKey}${forceRefresh ? ' (force refresh)' : ''}`);
-      
+
       const pool = getPool(database);
-      
+
       // Build zone filter subquery for booking-related queries
       // Join path: bookings.address_id -> addresses.id -> addresses.district_id -> districts.id -> districts.abbreviation
       const buildZoneFilter = (bookingAlias: string = 'b', paramOffset: number = 2): { clause: string; params: string[] } => {
@@ -3471,18 +3507,18 @@ Always be helpful and explain your suggestions in simple terms.`;
           params: selectedZones
         };
       };
-      
+
       // Generate periods based on periodType
       const periods: { startUTC: string; endUTC: string; label: string }[] = [];
       const now = new Date();
-      
+
       // Helper to get PST offset for a given date (handles DST)
       const getPSTOffset = (date: Date): string => {
         // PST = UTC-8, PDT = UTC-7
         // PDT: Second Sunday of March to First Sunday of November
         const month = date.getMonth();
         const day = date.getDate();
-        
+
         // March (2) - PDT starts second Sunday
         // November (10) - PDT ends first Sunday
         if (month > 2 && month < 10) {
@@ -3500,24 +3536,24 @@ Always be helpful and explain your suggestions in simple terms.`;
           return day >= firstSunday ? "-08:00" : "-07:00";
         }
       };
-      
+
       if (periodType === "monthly") {
         // Generate last 12 months (most recent first)
         for (let i = 0; i < 12; i++) {
           const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
           const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-          
+
           // Skip future months
           if (monthStart > now) continue;
-          
+
           const startOffset = getPSTOffset(monthStart);
           const endOffset = getPSTOffset(monthEnd);
-          
+
           const startDateStr = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01T00:00:00${startOffset}`;
           const endDateStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-01T00:00:00${endOffset}`;
-          
+
           const label = monthStart.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-          
+
           periods.push({
             startUTC: new Date(startDateStr).toISOString(),
             endUTC: new Date(endDateStr).toISOString(),
@@ -3529,14 +3565,14 @@ Always be helpful and explain your suggestions in simple terms.`;
         let currentYear = 2025;
         let currentMonth = 11; // December (0-indexed)
         let currentDay = 29;
-        
+
         while (true) {
           // Build week start date string in PST
           const weekStartDate = new Date(currentYear, currentMonth, currentDay);
           const startOffset = getPSTOffset(weekStartDate);
           const startDateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}T00:00:00${startOffset}`;
           const weekStartUTC = new Date(startDateStr).toISOString();
-          
+
           // Week end is 7 days later (next Monday at midnight) for exclusive upper bound
           const weekEndDate = new Date(currentYear, currentMonth, currentDay + 7);
           const endYear = weekEndDate.getFullYear();
@@ -3545,47 +3581,47 @@ Always be helpful and explain your suggestions in simple terms.`;
           const endOffset = getPSTOffset(weekEndDate);
           const endDateStr = `${endYear}-${String(endMonth + 1).padStart(2, '0')}-${String(endDay).padStart(2, '0')}T00:00:00${endOffset}`;
           const weekEndUTC = new Date(endDateStr).toISOString();
-          
+
           // If week start is past today, stop
           if (new Date(weekStartUTC) > now) break;
-          
+
           // Format label as "Dec 29 - Jan 4" (use Sunday, which is 6 days after Monday start)
           const labelEndDate = new Date(currentYear, currentMonth, currentDay + 6);
           const startMonthLabel = weekStartDate.toLocaleDateString("en-US", { month: "short" });
           const startDayLabel = weekStartDate.getDate();
           const endMonthLabel = labelEndDate.toLocaleDateString("en-US", { month: "short" });
           const endDayLabel = labelEndDate.getDate();
-          
-          const label = startMonthLabel === endMonthLabel 
+
+          const label = startMonthLabel === endMonthLabel
             ? `${startMonthLabel} ${startDayLabel} - ${endDayLabel}`
             : `${startMonthLabel} ${startDayLabel} - ${endMonthLabel} ${endDayLabel}`;
-          
+
           periods.push({ startUTC: weekStartUTC, endUTC: weekEndUTC, label });
-          
+
           // Move to next Monday (add 7 days)
           const nextMonday = new Date(currentYear, currentMonth, currentDay + 7);
           currentYear = nextMonday.getFullYear();
           currentMonth = nextMonday.getMonth();
           currentDay = nextMonday.getDate();
         }
-        
+
         // Reverse weekly periods to show most recent first
         periods.reverse();
       }
-      
+
       // Calculate metrics for each period
       const periodsData: any[] = [];
-      
+
       for (const period of periods) {
         const periodStartUTC = period.startUTC;
         const periodEndUTC = period.endUTC;
-        
+
         // Build zone filter for this iteration
         const zoneFilter = buildZoneFilter('b', 3); // params start at $3 (after periodStart, periodEnd)
         const zoneFilterNoAlias = buildZoneFilter('public.bookings', 3);
         const baseParams = [periodStartUTC, periodEndUTC];
         const paramsWithZones = [...baseParams, ...zoneFilter.params];
-        
+
         // Run all queries in parallel for efficiency
         const [
           bookingsCreatedResult,
@@ -3611,7 +3647,7 @@ Always be helpful and explain your suggestions in simple terms.`;
             WHERE b.created_at >= $1 AND b.created_at < $2
             ${zoneFilter.clause}
           `, paramsWithZones),
-          
+
           // 2. Bookings Due (date_due in week)
           pool.query(`
             SELECT COUNT(*) as count 
@@ -3619,7 +3655,7 @@ Always be helpful and explain your suggestions in simple terms.`;
             WHERE b.date_due >= $1 AND b.date_due < $2
             ${zoneFilter.clause}
           `, paramsWithZones),
-          
+
           // 3. Bookings Completed (date_due in week AND status = 'done')
           pool.query(`
             SELECT COUNT(*) as count 
@@ -3627,7 +3663,7 @@ Always be helpful and explain your suggestions in simple terms.`;
             WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
             ${zoneFilter.clause}
           `, paramsWithZones),
-          
+
           // 6, 7, 8: Revenue metrics for completed bookings (including stripe fees)
           pool.query(`
             SELECT 
@@ -3639,14 +3675,14 @@ Always be helpful and explain your suggestions in simple terms.`;
             WHERE b.date_due >= $1 AND b.date_due < $2 AND b.status = 'done'
             ${zoneFilter.clause}
           `, paramsWithZones),
-          
+
           // 10. Sign Ups (new users created_at in week) - NOT zone-filtered (users don't have zones)
           pool.query(`
             SELECT COUNT(*) as count 
             FROM public.users 
             WHERE created_at >= $1 AND created_at < $2
           `, baseParams),
-          
+
           // 11. New Users who have any booking (signed up in week AND have at least one booking ever)
           // Zone filter applies to the booking join
           pool.query(`
@@ -3656,7 +3692,7 @@ Always be helpful and explain your suggestions in simple terms.`;
             WHERE u.created_at >= $1 AND u.created_at < $2
             ${zoneFilter.clause}
           `, paramsWithZones),
-          
+
           // 13. Subscription Revenue and Margin (price and margin of UNIQUE completed bookings with date_due in week, linked to subscription_usages)
           pool.query(`
             SELECT 
@@ -3671,7 +3707,7 @@ Always be helpful and explain your suggestions in simple terms.`;
                 ${zoneFilter.clause}
             ) unique_bookings
           `, paramsWithZones).catch(() => ({ rows: [{ total_revenue: 0, total_margin: 0 }] })),
-          
+
           // 13b. Subscription Fees (paid subscription_invoices updated in week, with price based on price_plan_id)
           // Use DISTINCT ON to avoid double-counting when same subscription has multiple invoices
           // Exclude subscriptions with status='trialing' (first month free)
@@ -3701,7 +3737,7 @@ Always be helpful and explain your suggestions in simple terms.`;
                   AND cancellation_fee_charge_id != ''
               ), 0) as total
           `, baseParams).catch(() => ({ rows: [{ total: 0 }] })),
-          
+
           // 14. Member Bookings (unique completed bookings with date_due in week, linked to subscription_usages)
           pool.query(`
             SELECT COUNT(DISTINCT b.id) as count
@@ -3711,14 +3747,14 @@ Always be helpful and explain your suggestions in simple terms.`;
               AND b.status = 'done'
               ${zoneFilter.clause}
           `, paramsWithZones).catch(() => ({ rows: [{ count: 0 }] })),
-          
+
           // 16. New Membership Signups - NOT zone-filtered (subscriptions don't have zones)
           pool.query(`
             SELECT COUNT(*) as count
             FROM public.subscriptions
             WHERE created_at >= $1 AND created_at < $2
           `, baseParams).catch(() => ({ rows: [{ count: 0 }] })),
-          
+
           // Revenue from member bookings (for % calculation) - UNIQUE bookings only
           pool.query(`
             SELECT COALESCE(SUM(price), 0) as total
@@ -3730,7 +3766,7 @@ Always be helpful and explain your suggestions in simple terms.`;
                 ${zoneFilter.clause}
             ) unique_bookings
           `, paramsWithZones).catch(() => ({ rows: [{ total: 0 }] })),
-          
+
           // Customer fees charged in the week (exclude waived fees and those without charge_id) - NOT zone-filtered
           pool.query(`
             SELECT COALESCE(SUM(amount), 0) as total
@@ -3739,7 +3775,7 @@ Always be helpful and explain your suggestions in simple terms.`;
               AND (waived IS NULL OR waived != true)
               AND charge_id IS NOT NULL AND charge_id != ''
           `, baseParams).catch(() => ({ rows: [{ total: 0 }] })),
-          
+
           // Tips from booking_tips where tip was created in the week
           // Zone filter via the linked booking
           pool.query(`
@@ -3751,7 +3787,7 @@ Always be helpful and explain your suggestions in simple terms.`;
             WHERE bt.created_at >= $1 AND bt.created_at < $2
             ${zoneFilter.clause}
           `, paramsWithZones).catch(() => ({ rows: [{ tip_revenue: 0, tip_profit: 0 }] })),
-          
+
           // Credit packs purchased in the week - NOT zone-filtered (credit packs don't have zones)
           pool.query(`
             SELECT COALESCE(SUM(pay_amount), 0) as total
@@ -3763,7 +3799,7 @@ Always be helpful and explain your suggestions in simple terms.`;
                 AND uct.user_credits_transaction_type_id = 16
             ) unique_transactions
           `, baseParams).catch(() => ({ rows: [{ total: 0 }] })),
-          
+
           // Refunds from booking_refunds (created_at in week) - subtract from total revenue
           // Zone filter via the linked booking
           pool.query(`
@@ -3774,14 +3810,14 @@ Always be helpful and explain your suggestions in simple terms.`;
             ${zoneFilter.clause}
           `, paramsWithZones).catch(() => ({ rows: [{ total: 0 }] })),
         ]);
-        
+
         const bookingsCreated = parseInt(bookingsCreatedResult.rows[0]?.count || "0");
         const bookingsDue = parseInt(bookingsDueResult.rows[0]?.count || "0");
         const bookingsCompleted = parseInt(bookingsCompletedResult.rows[0]?.count || "0");
         const avgPerDay = bookingsCompleted / 7;
         const conversion = bookingsDue > 0 ? (bookingsCompleted / bookingsDue) * 100 : 0;
         const avgBookingPrice = parseFloat(revenueResult.rows[0]?.avg_price || "0");
-        
+
         // Revenue components
         const bookingRevenue = parseFloat(revenueResult.rows[0]?.total_revenue || "0");
         const bookingProfit = parseFloat(revenueResult.rows[0]?.total_profit || "0");
@@ -3794,37 +3830,37 @@ Always be helpful and explain your suggestions in simple terms.`;
         const tipProfit = parseFloat(tipsResult.rows[0]?.tip_profit || "0");
         const creditPackRevenue = parseFloat(creditPacksResult.rows[0]?.total || "0");
         const refundsTotal = parseFloat(refundsResult.rows[0]?.total || "0");
-        
+
         // Subscription Revenue = subscription booking revenue + subscription fees
         // Note: subscriptionBookingRevenue is already included in bookingRevenue (member bookings are a subset of all bookings)
         const subscriptionRevenue = subscriptionBookingRevenue + subscriptionFees;
-        
+
         // Total Revenue = booking revenue + subscription fees + customer fees + tips + credit packs - refunds - stripe fees
         // (subscriptionBookingRevenue is already part of bookingRevenue, so we only add subscriptionFees)
         const totalRevenue = bookingRevenue + subscriptionFees + customerFees + tipRevenue + creditPackRevenue - refundsTotal - stripeFees;
-        
+
         // Debug logging for revenue validation
         console.log(`[REVENUE DEBUG] ${period.label}: Booking=$${bookingRevenue.toFixed(2)}, SubFees=$${subscriptionFees.toFixed(2)}, CustFees=$${customerFees.toFixed(2)}, Tips=$${tipRevenue.toFixed(2)}, CreditPacks=$${creditPackRevenue.toFixed(2)}, Refunds=$${refundsTotal.toFixed(2)}, StripeFees=$${stripeFees.toFixed(2)}, TOTAL=$${totalRevenue.toFixed(2)}`);
-        
+
         // Gross Profit = booking margin + subscription fees (100% margin) + customer fees (100% margin) + tip profit - refunds
         // (subscriptionBookingProfit is already part of bookingProfit, so we don't add it again)
         // Credit packs are 100% revenue, 0% profit (or needs separate margin - currently not adding to profit)
         // Refunds reduce profit by the full refund amount
         const totalProfit = bookingProfit + subscriptionFees + customerFees + tipProfit - refundsTotal;
         const marginPercent = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
-        
+
         const signups = parseInt(signupsResult.rows[0]?.count || "0");
         const newUsersWithBookings = parseInt(newUsersWithBookingsResult.rows[0]?.count || "0");
         const newUserConversion = signups > 0 ? (newUsersWithBookings / signups) * 100 : 0;
         const memberBookings = parseInt(memberBookingsResult.rows[0]?.count || "0");
         const newSubscriptions = parseInt(newSubscriptionsResult.rows[0]?.count || "0");
         const memberBookingsRevenue = parseFloat(memberBookingsRevenueResult.rows[0]?.total || "0");
-        
+
         // % of revenue from memberships = Subscription Revenue / Total Revenue
-        const membershipRevenuePercent = totalRevenue > 0 
-          ? (subscriptionRevenue / totalRevenue) * 100 
+        const membershipRevenuePercent = totalRevenue > 0
+          ? (subscriptionRevenue / totalRevenue) * 100
           : 0;
-        
+
         periodsData.push({
           periodLabel: period.label,
           periodStart: periodStartUTC,
@@ -3850,7 +3886,7 @@ Always be helpful and explain your suggestions in simple terms.`;
           },
         });
       }
-      
+
       // Calculate variance (compare each period to previous period)
       // For weekly: periods are already in chronological order (oldest first), then reversed
       // For monthly: periods are already in reverse chronological order (newest first)
@@ -3866,12 +3902,12 @@ Always be helpful and explain your suggestions in simple terms.`;
           }
           const prev = periodsData[index + 1].metrics;
           const curr = periodItem.metrics;
-          
+
           const calcVariance = (current: number, previous: number) => {
             if (previous === 0) return current > 0 ? 100 : 0;
             return Math.round(((current - previous) / previous) * 100 * 100) / 100;
           };
-          
+
           return {
             ...periodItem,
             variance: {
@@ -3899,15 +3935,15 @@ Always be helpful and explain your suggestions in simple terms.`;
           if (index === 0) {
             return { ...periodItem, variance: null };
           }
-          
+
           const prev = periodsData[index - 1].metrics;
           const curr = periodItem.metrics;
-          
+
           const calcVariance = (current: number, previous: number) => {
             if (previous === 0) return current > 0 ? 100 : 0;
             return Math.round(((current - previous) / previous) * 100 * 100) / 100;
           };
-          
+
           return {
             ...periodItem,
             variance: {
@@ -3932,12 +3968,12 @@ Always be helpful and explain your suggestions in simple terms.`;
           };
         }
       });
-      
+
       // Reverse weekly to show most recent first (monthly already newest first)
       if (periodType !== "monthly") {
         periodsDataWithVariance.reverse();
       }
-      
+
       await logAudit({
         userId,
         userEmail: user.email,
@@ -3947,19 +3983,19 @@ Always be helpful and explain your suggestions in simple terms.`;
         ip: req.ip || undefined,
         details: `Viewed ${periodsDataWithVariance.length} ${periodType === 'monthly' ? 'months' : 'weeks'}`,
       });
-      
+
       const responseData = {
         periods: periodsDataWithVariance,
         periodType,
         generatedAt: new Date().toISOString(),
         selectedZones: selectedZones.length > 0 ? selectedZones : null,
       };
-      
+
       // Cache the response - use 1-hour cache since it includes current week
       const cacheDuration = getCacheDuration(true); // Current period = 1 hour
       setInCache(cacheKey, responseData, cacheDuration);
       console.log(`[Cache SET] Marketing dashboard: ${cacheKey} (expires in ${cacheDuration / 60000} minutes)`);
-      
+
       res.json({ ...responseData, fromCache: false });
     } catch (err) {
       console.error("Error fetching weekly performance:", err);
@@ -3974,41 +4010,41 @@ Always be helpful and explain your suggestions in simple terms.`;
       const { message, dashboardData, selectedWeek, periodType = "weekly" } = req.body;
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      
+
       if (!user) {
         return res.status(401).json({ error: "Unauthorized" });
       }
-      
+
       if (!message) {
         return res.status(400).json({ error: "Message is required" });
       }
-      
-      const client = getOpenAIClient();
+
+      const client = getGeminiClient();
       if (!client) {
         return res.status(503).json({ error: "AI service not available" });
       }
-      
+
       // Check if user can drill down (Admin or WashOS User only)
       const canDrillDown = user.role === "admin" || user.role === "washos_user";
-      
+
       // Import metric specs
       const { METRIC_SPECS, getAllMetricSpecs } = await import("./weeklyMetrics");
-      
+
       // Build context about the dashboard data with explicit period dates
       const currentYear = new Date().getFullYear();
       const periodLabel = periodType === "monthly" ? "month" : "week";
       const periodsLabel = periodType === "monthly" ? "months" : "weeks";
-      
+
       // Support both old (weeks) and new (periods) data format
       const periods = dashboardData?.periods || dashboardData?.weeks || [];
-      
+
       const availablePeriodsContext = periods.length > 0
-        ? `Available ${periodsLabel} with their EXACT date ranges (use these dates for drill-down):\n${periods.map((p: any) => 
-            `- "${p.periodLabel || p.weekLabel}": periodStart="${p.periodStart || p.weekStart}", periodEnd="${p.periodEnd || p.weekEnd}"`
-          ).join('\n')}`
+        ? `Available ${periodsLabel} with their EXACT date ranges (use these dates for drill-down):\n${periods.map((p: any) =>
+          `- "${p.periodLabel || p.weekLabel}": periodStart="${p.periodStart || p.weekStart}", periodEnd="${p.periodEnd || p.weekEnd}"`
+        ).join('\n')}`
         : '';
-      
-      const metricsContext = periods.length > 0 
+
+      const metricsContext = periods.length > 0
         ? `The dashboard currently shows ${periods.length} ${periodsLabel} of data.
           
 The most recent ${periodLabel} (${periods[0]?.periodLabel || periods[0]?.weekLabel || 'Current'}) has these metrics:
@@ -4021,17 +4057,17 @@ ${periods.length > 1 ? `Previous ${periodLabel} (${periods[1]?.periodLabel || pe
 ${JSON.stringify(periods[1]?.metrics || {}, null, 2)}` : ''}
 `
         : "No dashboard data is currently loaded.";
-      
+
       // Build metric specs context for AI
-      const metricSpecsList = getAllMetricSpecs().map(m => 
+      const metricSpecsList = getAllMetricSpecs().map(m =>
         `- ${m.name} (id: ${m.id}): ${m.description}\n  Formula: ${m.formula}${m.subSources ? `\n  Sub-sources: ${m.subSources.map(s => s.name).join(", ")}` : ""}`
       ).join("\n\n");
-      
+
       // Get selected period info with fallbacks for old/new format
       const selectedPeriodLabel = selectedWeek?.periodLabel || selectedWeek?.weekLabel;
       const selectedPeriodStart = selectedWeek?.periodStart || selectedWeek?.weekStart;
       const selectedPeriodEnd = selectedWeek?.periodEnd || selectedWeek?.weekEnd;
-      
+
       const systemPrompt = `You are an AI assistant for the WashOS Marketing Performance Dashboard. Your role is to help users understand and analyze their business metrics.
 
 IMPORTANT: The current year is ${currentYear}. When users mention dates like "Jan 12-18", they mean ${currentYear}, NOT any other year.
@@ -4075,86 +4111,83 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       // Define tools for function calling (only if user can drill down)
       const tools = canDrillDown ? [
         {
-          type: "function" as const,
-          function: {
-            name: "get_metric_details",
-            description: "Get the exact calculation formula and description for a specific metric",
-            parameters: {
-              type: "object",
-              properties: {
-                metricId: {
-                  type: "string",
-                  description: "The metric ID (e.g., totalRevenue, bookingsCompleted, signups)",
-                  enum: Object.keys(METRIC_SPECS),
-                },
+          name: "get_metric_details",
+          description: "Get the exact calculation formula and description for a specific metric",
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+              metricId: {
+                type: SchemaType.STRING,
+                description: "The metric ID (e.g., totalRevenue, bookingsCompleted, signups)",
+                enum: Object.keys(METRIC_SPECS),
               },
-              required: ["metricId"],
             },
+            required: ["metricId"],
           },
         },
         {
-          type: "function" as const,
-          function: {
-            name: "get_metric_rows",
-            description: "Fetch the actual database rows that contribute to a metric for a specific week. Returns up to 50 rows as a preview with a CSV download option for full data.",
-            parameters: {
-              type: "object",
-              properties: {
-                metricId: {
-                  type: "string",
-                  description: "The metric ID (e.g., totalRevenue, bookingsCompleted)",
-                  enum: Object.keys(METRIC_SPECS),
-                },
-                subSourceId: {
-                  type: "string",
-                  description: "For metrics with multiple sources (like totalRevenue), optionally specify a sub-source (e.g., bookingRevenue, subscriptionFees, tips, refunds, creditPacks, stripeFees)",
-                },
-                weekStart: {
-                  type: "string",
-                  description: "ISO date string for the start of the week (UTC)",
-                },
-                weekEnd: {
-                  type: "string",
-                  description: "ISO date string for the end of the week (UTC)",
-                },
+          name: "get_metric_rows",
+          description: "Fetch the actual database rows that contribute to a metric for a specific week. Returns up to 50 rows as a preview with a CSV download option for full data.",
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+              metricId: {
+                type: SchemaType.STRING,
+                description: "The metric ID (e.g., totalRevenue, bookingsCompleted)",
+                enum: Object.keys(METRIC_SPECS),
               },
-              required: ["metricId", "weekStart", "weekEnd"],
+              subSourceId: {
+                type: SchemaType.STRING,
+                description: "For metrics with multiple sources (like totalRevenue), optionally specify a sub-source (e.g., bookingRevenue, subscriptionFees, tips, refunds, creditPacks, stripeFees)",
+              },
+              weekStart: {
+                type: SchemaType.STRING,
+                description: "ISO date string for the start of the week (UTC)",
+              },
+              weekEnd: {
+                type: SchemaType.STRING,
+                description: "ISO date string for the end of the week (UTC)",
+              },
             },
+            required: ["metricId", "weekStart", "weekEnd"],
           },
         },
       ] : undefined;
 
-      // Initial AI call
-      const messages: any[] = [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message }
-      ];
-      
-      let response = await client.chat.completions.create({
-        model: AI_CONFIG.reportChat.model,
-        messages,
-        tools,
-        temperature: 0.7,
-        max_tokens: 2000,
+      const model = client.getGenerativeModel({
+        model: GEMINI_CONFIG.modelName,
+        tools: tools ? [{ functionDeclarations: tools as any }] : undefined,
+        generationConfig: GEMINI_CONFIG.generationConfig,
       });
-      
-      let assistantMessage = response.choices[0]?.message;
-      
+
+      const chat = model.startChat({
+        history: [
+          { role: "user", parts: [{ text: systemPrompt }] },
+          { role: "model", parts: [{ text: "Understood. I'm ready to help with weekly performance metrics." }] }
+        ]
+      });
+
+      let result = await chat.sendMessage(message);
+      let response = result.response;
+      let assistantMessage = response.text();
+
       // Handle tool calls if any
       const toolResults: any[] = [];
-      
-      while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
-        messages.push(assistantMessage);
-        
-        for (const toolCall of assistantMessage.tool_calls) {
-          const tc = toolCall as any;
-          const args = JSON.parse(tc.function.arguments);
-          let result: any;
-          
-          if (tc.function.name === "get_metric_details") {
+
+      while (response.functionCalls()) {
+        const functionCalls = response.functionCalls();
+        if (!functionCalls) break;
+
+        const functionResponses: any[] = [];
+
+        for (const call of functionCalls) {
+          const args = call.args as any;
+          let functionResult: any;
+
+          if (call.name === "get_metric_details") {
             const spec = METRIC_SPECS[args.metricId];
             if (spec) {
-              result = {
+              functionResult = {
                 name: spec.name,
                 category: spec.category,
                 formula: spec.formula,
@@ -4163,17 +4196,17 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
                 subSources: spec.subSources?.map(s => ({ id: s.id, name: s.name })),
               };
             } else {
-              result = { error: "Metric not found" };
+              functionResult = { error: "Metric not found" };
             }
-          } else if (tc.function.name === "get_metric_rows") {
-            const pool = getPool(database);
+          } else if (call.name === "get_metric_rows") {
+            const pool = getPool(database); // Added pool definition
             const spec = METRIC_SPECS[args.metricId];
-            
+
             if (!spec) {
-              result = { error: "Metric not found" };
+              functionResult = { error: "Metric not found" };
             } else {
               let queryConfig;
-              
+
               // Check if requesting a sub-source
               if (args.subSourceId && spec.subSources) {
                 const subSource = spec.subSources.find(s => s.id === args.subSourceId);
@@ -4181,24 +4214,24 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
                   queryConfig = subSource.getDrilldownQuery(args.weekStart, args.weekEnd);
                 }
               }
-              
+
               // Fall back to main query
               if (!queryConfig) {
                 queryConfig = spec.getDrilldownQuery(args.weekStart, args.weekEnd);
               }
-              
+
               try {
                 const queryResult = await pool.query(
                   queryConfig.sql + " LIMIT 50",
                   queryConfig.params
                 );
-                
+
                 // Get total count
                 const countSql = `SELECT COUNT(*) as total FROM (${queryConfig.sql}) as subq`;
                 const countResult = await pool.query(countSql, queryConfig.params);
                 const totalCount = parseInt(countResult.rows[0]?.total || "0");
-                
-                result = {
+
+                functionResult = {
                   metricName: spec.name,
                   subSource: args.subSourceId,
                   columns: queryConfig.columns,
@@ -4208,16 +4241,16 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
                   hasMore: totalCount > 50,
                   csvExportAvailable: totalCount > 0,
                 };
-                
+
                 // Store for CSV export
                 toolResults.push({
                   metricId: args.metricId,
                   subSourceId: args.subSourceId,
                   weekStart: args.weekStart,
                   weekEnd: args.weekEnd,
-                  ...result,
+                  ...functionResult,
                 });
-                
+
                 await logAudit({
                   userId,
                   userEmail: user.email,
@@ -4228,32 +4261,27 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
                 });
               } catch (queryErr) {
                 console.error("Drilldown query error:", queryErr);
-                result = { error: "Failed to fetch data" };
+                functionResult = { error: "Failed to fetch data" };
               }
             }
           }
-          
-          messages.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result),
+
+          functionResponses.push({
+            functionResponse: {
+              name: call.name,
+              response: functionResult
+            }
           });
         }
-        
-        // Continue conversation with tool results
-        response = await client.chat.completions.create({
-          model: AI_CONFIG.reportChat.model,
-          messages,
-          tools,
-          temperature: 0.7,
-          max_tokens: 2000,
-        });
-        
-        assistantMessage = response.choices[0]?.message;
+
+        // Send function responses back to model
+        result = await chat.sendMessage(functionResponses);
+        response = result.response;
+        assistantMessage = response.text();
       }
-      
-      const finalMessage = assistantMessage?.content || "I apologize, but I couldn't generate a response. Please try again.";
-      
+
+      const finalMessage = assistantMessage || "I apologize, but I couldn't generate a response. Please try again.";
+
       await logAudit({
         userId,
         userEmail: user.email,
@@ -4262,8 +4290,8 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
         details: `AI chat message: ${message.substring(0, 100)}...`,
         ip: req.ip || undefined,
       });
-      
-      res.json({ 
+
+      res.json({
         message: finalMessage,
         drilldownData: toolResults.length > 0 ? toolResults : undefined,
       });
@@ -4272,7 +4300,7 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       res.status(500).json({ error: "Failed to process AI request" });
     }
   });
-  
+
   // CSV Export for drilldown data
   app.get("/api/weekly-performance/:database/drilldown-export", isAuthenticated, exportLimiter, async (req, res) => {
     try {
@@ -4280,27 +4308,27 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       const { metricId, subSourceId, weekStart, weekEnd } = req.query;
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      
+
       if (!user) {
         return res.status(401).json({ error: "Unauthorized" });
       }
-      
+
       // Check role - only Admin and WashOS users can export
       if (user.role !== "admin" && user.role !== "washos_user") {
         return res.status(403).json({ error: "Export not available for your role" });
       }
-      
+
       if (!metricId || !weekStart || !weekEnd) {
         return res.status(400).json({ error: "Missing required parameters" });
       }
-      
+
       const { METRIC_SPECS } = await import("./weeklyMetrics");
       const spec = METRIC_SPECS[metricId as string];
-      
+
       if (!spec) {
         return res.status(400).json({ error: "Invalid metric" });
       }
-      
+
       let queryConfig;
       if (subSourceId && spec.subSources) {
         const subSource = spec.subSources.find(s => s.id === subSourceId);
@@ -4311,18 +4339,18 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       if (!queryConfig) {
         queryConfig = spec.getDrilldownQuery(weekStart as string, weekEnd as string);
       }
-      
+
       const pool = getPool(database);
-      
+
       // Limit to 10,000 rows for safety
       const result = await pool.query(
         queryConfig.sql + " LIMIT 10000",
         queryConfig.params
       );
-      
+
       // Build CSV
       const headers = queryConfig.columns.join(",");
-      const rows = result.rows.map((row: Record<string, unknown>) => 
+      const rows = result.rows.map((row: Record<string, unknown>) =>
         queryConfig.columns.map((col: string) => {
           const val = row[col];
           if (val === null || val === undefined) return "";
@@ -4333,9 +4361,9 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
           return strVal;
         }).join(",")
       );
-      
+
       const csv = [headers, ...rows].join("\n");
-      
+
       await logAudit({
         userId,
         userEmail: user.email,
@@ -4344,7 +4372,7 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
         details: `Metric: ${spec.name}${subSourceId ? ` (${subSourceId})` : ""}, ${result.rows.length} rows exported`,
         ip: req.ip || undefined,
       });
-      
+
       res.setHeader("Content-Type", "text/csv");
       res.setHeader("Content-Disposition", `attachment; filename="${spec.id}_${subSourceId || 'all'}_drilldown.csv"`);
       res.send(csv);
@@ -4385,30 +4413,30 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
   app.get("/api/stripe-metrics", isAuthenticated, async (req, res) => {
     try {
       const { weekStart, weekEnd } = req.query;
-      
+
       if (!weekStart || !weekEnd) {
         return res.status(400).json({ error: "weekStart and weekEnd query parameters required" });
       }
-      
+
       // Check if Stripe is connected
       const stripeConnected = await checkStripeConnection();
       if (!stripeConnected) {
-        return res.status(503).json({ 
+        return res.status(503).json({
           error: "Stripe not connected",
           message: "Please connect your Stripe account to view financial metrics"
         });
       }
-      
+
       // Parse the week boundaries (these come as ISO strings from the frontend)
       // Convert to Unix timestamps for Stripe API
       const startDate = new Date(weekStart as string);
       const endDate = new Date(weekEnd as string);
-      
+
       const startTimestamp = Math.floor(startDate.getTime() / 1000);
       const endTimestamp = Math.floor(endDate.getTime() / 1000);
-      
+
       const metrics = await getStripeMetricsForWeek(startTimestamp, endTimestamp);
-      
+
       res.json({
         weekStart: weekStart,
         weekEnd: weekEnd,
@@ -4419,7 +4447,7 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       res.status(500).json({ error: "Failed to fetch Stripe metrics", message: error.message });
     }
   });
-  
+
   // Check Stripe connection status
   app.get("/api/stripe-status", isAuthenticated, async (req, res) => {
     try {
@@ -4440,11 +4468,11 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       const selectedZones: string[] = zonesParam ? zonesParam.split(",").filter(Boolean) : [];
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      
+
       if (!user) {
         return res.status(401).json({ error: "Unauthorized" });
       }
-      
+
       // Check cache first (unless force refresh) - include zones in cache key
       const zonesKey = selectedZones.length > 0 ? `_zones:${selectedZones.sort().join(",")}` : "";
       const cacheKey = getCacheKey("operations", database, periodType) + zonesKey;
@@ -4456,9 +4484,9 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
         }
       }
       console.log(`[Cache MISS] Operations dashboard: ${cacheKey}${forceRefresh ? ' (force refresh)' : ''}`);
-      
+
       const pool = getPool(database);
-      
+
       // Helper to get PST offset for a given date (handles DST)
       const getPSTOffset = (date: Date): string => {
         const month = date.getMonth();
@@ -4479,79 +4507,79 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
           return "-07:00";
         }
       };
-      
+
       // Generate periods based on periodType
       const periods: { startUTC: string; endUTC: string; label: string }[] = [];
       const now = new Date();
-      
+
       if (periodType === "monthly") {
         // Generate last 12 months
         for (let i = 0; i < 12; i++) {
           const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
           const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-          
+
           const startOffset = getPSTOffset(monthStart);
           const endOffset = getPSTOffset(monthEnd);
-          
+
           const startUTC = new Date(`${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01T00:00:00${startOffset}`).toISOString();
           const endUTC = new Date(`${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-01T00:00:00${endOffset}`).toISOString();
-          
+
           const monthLabel = monthStart.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-          
+
           periods.push({ startUTC, endUTC, label: monthLabel });
         }
       } else {
         // Weekly: Generate weeks from Dec 29, 2025 to current week (Mon-Sun, PST)
         const startDate = new Date("2025-12-29T00:00:00-08:00");
-        
+
         let currentMonday = new Date(now);
         currentMonday.setDate(currentMonday.getDate() - ((currentMonday.getDay() + 6) % 7));
         currentMonday.setHours(0, 0, 0, 0);
-        
+
         let weekStart = startDate;
         while (weekStart <= currentMonday) {
           const weekEnd = new Date(weekStart);
           weekEnd.setDate(weekEnd.getDate() + 7);
-          
+
           const startOffset = getPSTOffset(weekStart);
           const endOffset = getPSTOffset(weekEnd);
-          
+
           const year = weekStart.getFullYear();
           const month = String(weekStart.getMonth() + 1).padStart(2, '0');
           const day = String(weekStart.getDate()).padStart(2, '0');
           const startUTC = new Date(`${year}-${month}-${day}T00:00:00${startOffset}`).toISOString();
-          
+
           const endYear = weekEnd.getFullYear();
           const endMonth = String(weekEnd.getMonth() + 1).padStart(2, '0');
           const endDay = String(weekEnd.getDate()).padStart(2, '0');
           const endUTC = new Date(`${endYear}-${endMonth}-${endDay}T00:00:00${endOffset}`).toISOString();
-          
+
           const weekLabel = `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(weekEnd.getTime() - 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-          
+
           periods.push({ startUTC, endUTC, label: weekLabel });
-          
+
           weekStart = weekEnd;
         }
       }
-      
+
       // For weekly: reverse to show most recent first (weeks are built oldest to newest)
       // For monthly: already built most recent first, no reverse needed
       if (periodType === "weekly") {
         periods.reverse();
       }
-      
+
       // Limit to 52 weeks or 12 months
       const limitedPeriods = periods.slice(0, periodType === "monthly" ? 12 : 52);
-      
+
       // Calculate metrics for each period (no Stripe calls - too slow)
       const results: OperationsPeriodMetrics[] = [];
-      
+
       for (let i = 0; i < limitedPeriods.length; i++) {
         const period = limitedPeriods[i];
-        
+
         // Calculate metrics without Stripe data (uses database margin values instead)
         const metrics = await calculateOperationsMetrics(pool, period.startUTC, period.endUTC, null, selectedZones);
-        
+
         // Get previous period metrics for variance
         let variance: Record<string, number | null> = {};
         if (i < limitedPeriods.length - 1) {
@@ -4559,7 +4587,7 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
           const prevMetrics = await calculateOperationsMetrics(pool, prevPeriod.startUTC, prevPeriod.endUTC, null, selectedZones);
           variance = calculateOperationsVariance(metrics, prevMetrics);
         }
-        
+
         results.push({
           periodLabel: period.label,
           periodStart: period.startUTC,
@@ -4569,18 +4597,18 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
           variance,
         });
       }
-      
+
       const responseData = {
         periods: results,
         stripeConnected: false,
         periodType,
       };
-      
+
       // Cache the response - use 1-hour cache since it includes current period
       const cacheDuration = getCacheDuration(true); // Current period = 1 hour
       setInCache(cacheKey, responseData, cacheDuration);
       console.log(`[Cache SET] Operations dashboard: ${cacheKey} (expires in ${cacheDuration / 60000} minutes)`);
-      
+
       res.json({ ...responseData, fromCache: false });
     } catch (error: any) {
       console.error("Operations performance error:", error);
@@ -4595,34 +4623,34 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       const { message, dashboardData, selectedPeriod, periodType } = req.body;
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      
+
       if (!user) {
         return res.status(401).json({ error: "Unauthorized" });
       }
-      
+
       if (!message) {
         return res.status(400).json({ error: "Message is required" });
       }
-      
-      const client = getOpenAIClient();
+
+      const client = getGeminiClient();
       if (!client) {
         return res.status(503).json({ error: "AI service not available" });
       }
-      
+
       const pool = getPool(database);
-      
+
       // Check if user can drill down (Admin or WashOS User only)
       const canDrillDown = user.role === "admin" || user.role === "washos_user";
-      
+
       // Build context about the dashboard data
       const currentYear = new Date().getFullYear();
       const availablePeriodsContext = dashboardData?.periods?.length > 0
-        ? `Available ${periodType === 'monthly' ? 'months' : 'weeks'} with their EXACT date ranges (use these dates for drill-down):\n${dashboardData.periods.map((p: any) => 
-            `- "${p.periodLabel}": periodStart="${p.periodStart}", periodEnd="${p.periodEnd}"`
-          ).join('\n')}`
+        ? `Available ${periodType === 'monthly' ? 'months' : 'weeks'} with their EXACT date ranges (use these dates for drill-down):\n${dashboardData.periods.map((p: any) =>
+          `- "${p.periodLabel}": periodStart="${p.periodStart}", periodEnd="${p.periodEnd}"`
+        ).join('\n')}`
         : '';
-      
-      const metricsContext = dashboardData?.periods?.length > 0 
+
+      const metricsContext = dashboardData?.periods?.length > 0
         ? `The dashboard currently shows ${dashboardData.periods.length} ${periodType === 'monthly' ? 'months' : 'weeks'} of data.
           
 The most recent ${periodType === 'monthly' ? 'month' : 'week'} (${dashboardData.periods[0]?.periodLabel || 'Current'}) has these metrics:
@@ -4635,15 +4663,15 @@ ${dashboardData.periods.length > 1 ? `Previous ${periodType === 'monthly' ? 'mon
 ${JSON.stringify(dashboardData.periods[1]?.metrics || {}, null, 2)}` : ''}
 `
         : "No dashboard data is currently loaded.";
-      
+
       // Build metric specs context for AI
-      const metricSpecsList = getAllOperationsMetricSpecs().map(m => 
+      const metricSpecsList = getAllOperationsMetricSpecs().map(m =>
         `- ${m.name} (id: ${m.id}): ${m.description}\n  Formula: ${m.formula}\n  Category: ${m.category}`
       ).join("\n\n");
-      
+
       const periodLabel = periodType === 'monthly' ? 'month' : 'week';
       const periodsLabel = periodType === 'monthly' ? 'months' : 'weeks';
-      
+
       const systemPrompt = `You are an AI assistant for the WashOS Operations Performance Dashboard. Your role is to help users understand and analyze their operations metrics.
 
 IMPORTANT: The current year is ${currentYear}. When users mention dates, they mean ${currentYear}, NOT any other year.
@@ -4685,80 +4713,79 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
       // Define tools for function calling (only if user can drill down)
       const tools = canDrillDown ? [
         {
-          type: "function" as const,
-          function: {
-            name: "get_metric_details",
-            description: "Get the exact calculation formula and description for a specific operations metric",
-            parameters: {
-              type: "object",
-              properties: {
-                metricId: {
-                  type: "string",
-                  description: "The metric ID (e.g., bookingsCompleted, emergencies, deliveryRate)",
-                  enum: Object.keys(OPERATIONS_METRIC_SPECS),
-                },
+          name: "get_metric_details",
+          description: "Get the exact calculation formula and description for a specific operations metric",
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+              metricId: {
+                type: SchemaType.STRING,
+                description: "The metric ID (e.g., bookingsCompleted, emergencies, deliveryRate)",
+                enum: Object.keys(OPERATIONS_METRIC_SPECS),
               },
-              required: ["metricId"],
             },
+            required: ["metricId"],
           },
         },
         {
-          type: "function" as const,
-          function: {
-            name: "get_metric_rows",
-            description: "Fetch the actual database rows that contribute to a metric for a specific period. Returns up to 50 rows as a preview with a CSV download option for full data.",
-            parameters: {
-              type: "object",
-              properties: {
-                metricId: {
-                  type: "string",
-                  description: "The metric ID (e.g., bookingsCompleted, emergencies, deliveryRate)",
-                  enum: Object.keys(OPERATIONS_METRIC_SPECS),
-                },
-                periodStart: {
-                  type: "string",
-                  description: "ISO date string for the start of the period (UTC)",
-                },
-                periodEnd: {
-                  type: "string",
-                  description: "ISO date string for the end of the period (UTC)",
-                },
+          name: "get_metric_rows",
+          description: "Fetch the actual database rows that contribute to a metric for a specific period. Returns up to 50 rows as a preview with a CSV download option for full data.",
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+              metricId: {
+                type: SchemaType.STRING,
+                description: "The metric ID (e.g., bookingsCompleted, emergencies, deliveryRate)",
+                enum: Object.keys(OPERATIONS_METRIC_SPECS),
               },
-              required: ["metricId", "periodStart", "periodEnd"],
+              periodStart: {
+                type: SchemaType.STRING,
+                description: "ISO date string for the start of the period (UTC)",
+              },
+              periodEnd: {
+                type: SchemaType.STRING,
+                description: "ISO date string for the end of the period (UTC)",
+              },
             },
+            required: ["metricId", "periodStart", "periodEnd"],
           },
         },
       ] : undefined;
 
-      // Initial AI call
-      const messages: any[] = [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message }
-      ];
-
-      let response = await client.chat.completions.create({
-        model: AI_CONFIG.reportChat.model,
-        messages,
-        tools,
-        temperature: 0.7,
-        max_tokens: 2000,
+      const model = client.getGenerativeModel({
+        model: GEMINI_CONFIG.modelName,
+        tools: tools ? [{ functionDeclarations: tools as any }] : undefined,
+        generationConfig: GEMINI_CONFIG.generationConfig,
       });
 
-      let assistantMessage = response.choices[0]?.message;
-      const toolResults: any[] = [];
+      const chat = model.startChat({
+        history: [
+          { role: "user", parts: [{ text: systemPrompt }] },
+          { role: "model", parts: [{ text: "Understood. I'm ready to help with operations performance metrics." }] }
+        ]
+      });
+
+      let result = await chat.sendMessage(message);
+      let response = result.response;
+      let assistantMessage = response.text();
 
       // Handle tool calls
-      while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
-        messages.push(assistantMessage);
-        
-        for (const toolCall of assistantMessage.tool_calls) {
-          let result: any;
-          
-          if (toolCall.function.name === "get_metric_details") {
-            const args = JSON.parse(toolCall.function.arguments);
+      const toolResults: any[] = [];
+
+      while (response.functionCalls()) {
+        const functionCalls = response.functionCalls();
+        if (!functionCalls) break;
+
+        const functionResponses: any[] = [];
+
+        for (const call of functionCalls) {
+          const args = call.args as any;
+          let functionResult: any;
+
+          if (call.name === "get_metric_details") {
             const spec = getOperationsMetricSpec(args.metricId);
             if (spec) {
-              result = {
+              functionResult = {
                 name: spec.name,
                 category: spec.category,
                 formula: spec.formula,
@@ -4767,29 +4794,28 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
                 sourceTables: spec.sourceTables,
               };
             } else {
-              result = { error: "Unknown metric" };
+              functionResult = { error: "Unknown metric" };
             }
-          } else if (toolCall.function.name === "get_metric_rows") {
-            const args = JSON.parse(toolCall.function.arguments);
+          } else if (call.name === "get_metric_rows") {
             const spec = getOperationsMetricSpec(args.metricId);
-            
+
             if (!spec) {
-              result = { error: "Unknown metric" };
+              functionResult = { error: "Unknown metric" };
             } else {
-              const queryConfig = spec.getDrilldownQuery(args.periodStart, args.periodEnd);
-              
               try {
+                const queryConfig = spec.getDrilldownQuery(args.periodStart, args.periodEnd);
+
                 const queryResult = await pool.query(
                   queryConfig.sql + " LIMIT 50",
                   queryConfig.params
                 );
-                
+
                 // Get total count
                 const countSql = `SELECT COUNT(*) as total FROM (${queryConfig.sql}) as subq`;
                 const countResult = await pool.query(countSql, queryConfig.params);
                 const totalCount = parseInt(countResult.rows[0]?.total || "0");
-                
-                result = {
+
+                functionResult = {
                   metricName: spec.name,
                   columns: queryConfig.columns,
                   rows: queryResult.rows,
@@ -4798,15 +4824,15 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
                   hasMore: totalCount > 50,
                   csvExportAvailable: totalCount > 0,
                 };
-                
+
                 // Store for CSV export
                 toolResults.push({
                   metricId: args.metricId,
                   periodStart: args.periodStart,
                   periodEnd: args.periodEnd,
-                  ...result,
+                  ...functionResult,
                 });
-                
+
                 await logAudit({
                   userId,
                   userEmail: user.email,
@@ -4815,34 +4841,29 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
                   details: `Metric: ${spec.name}, ${totalCount} rows`,
                   ip: req.ip || undefined,
                 });
-              } catch (queryErr) {
+              } catch (queryErr: any) {
                 console.error("Drilldown query error:", queryErr);
-                result = { error: "Failed to fetch data" };
+                functionResult = { error: "Failed to fetch data", details: queryErr.message };
               }
             }
           }
-          
-          messages.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result),
+
+          functionResponses.push({
+            functionResponse: {
+              name: call.name,
+              response: functionResult
+            }
           });
         }
-        
-        // Continue conversation with tool results
-        response = await client.chat.completions.create({
-          model: AI_CONFIG.reportChat.model,
-          messages,
-          tools,
-          temperature: 0.7,
-          max_tokens: 2000,
-        });
-        
-        assistantMessage = response.choices[0]?.message;
+
+        // Send function responses back to model
+        result = await chat.sendMessage(functionResponses);
+        response = result.response;
+        assistantMessage = response.text();
       }
-      
-      const finalMessage = assistantMessage?.content || "I apologize, but I couldn't generate a response. Please try again.";
-      
+
+      const finalMessage = assistantMessage || "I apologize, but I couldn't generate a response. Please try again.";
+
       await logAudit({
         userId,
         userEmail: user.email,
@@ -4851,8 +4872,8 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
         details: `AI chat message: ${message.substring(0, 100)}...`,
         ip: req.ip || undefined,
       });
-      
-      res.json({ 
+
+      res.json({
         message: finalMessage,
         drilldownData: toolResults.length > 0 ? toolResults : undefined,
       });
@@ -4861,7 +4882,7 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
       res.status(500).json({ error: "Failed to process AI request" });
     }
   });
-  
+
   // CSV Export for operations drilldown data
   app.get("/api/operations-performance/:database/drilldown-export", isAuthenticated, exportLimiter, async (req, res) => {
     try {
@@ -4869,37 +4890,37 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
       const { metricId, periodStart, periodEnd } = req.query;
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      
+
       if (!user) {
         return res.status(401).json({ error: "Unauthorized" });
       }
-      
+
       // Only Admin and WashOS User can export
       if (user.role !== "admin" && user.role !== "washos_user") {
         return res.status(403).json({ error: "Export not available for this user role" });
       }
-      
+
       if (!metricId || !periodStart || !periodEnd) {
         return res.status(400).json({ error: "Missing required parameters" });
       }
-      
+
       const spec = getOperationsMetricSpec(metricId as string);
       if (!spec) {
         return res.status(400).json({ error: "Unknown metric" });
       }
-      
+
       const pool = getPool(database);
       const queryConfig = spec.getDrilldownQuery(periodStart as string, periodEnd as string);
-      
+
       // Get up to 10,000 rows for export
       const result = await pool.query(
         queryConfig.sql + " LIMIT 10000",
         queryConfig.params
       );
-      
+
       // Convert to CSV
       const headers = queryConfig.columns.join(",");
-      const rows = result.rows.map((row: any) => 
+      const rows = result.rows.map((row: any) =>
         queryConfig.columns.map(col => {
           const val = row[col];
           if (val === null || val === undefined) return "";
@@ -4911,9 +4932,9 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
           return str;
         }).join(",")
       ).join("\n");
-      
+
       const csv = headers + "\n" + rows;
-      
+
       await logAudit({
         userId,
         userEmail: user.email,
@@ -4922,7 +4943,7 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
         details: `Metric: ${spec.name}, Exported ${result.rows.length} rows`,
         ip: req.ip || undefined,
       });
-      
+
       res.setHeader("Content-Type", "text/csv");
       res.setHeader("Content-Disposition", `attachment; filename="${metricId}_${periodStart}_to_${periodEnd}.csv"`);
       res.send(csv);
@@ -4939,23 +4960,23 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
       const { metricId, periodStart, periodEnd, prevPeriodStart, prevPeriodEnd } = req.query;
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      
+
       if (!user) {
         return res.status(401).json({ error: "Unauthorized" });
       }
-      
+
       if (!metricId || !periodStart || !periodEnd) {
         return res.status(400).json({ error: "Missing required parameters: metricId, periodStart, periodEnd" });
       }
-      
+
       // Validate metricId using the canonical OPERATIONS_METRIC_SPECS source
       const metricSpec = getOperationsMetricSpec(metricId as string);
       if (!metricSpec) {
         return res.status(400).json({ error: `Invalid metricId: ${metricId}. Use a valid operations metric ID.` });
       }
-      
+
       const pool = getPool(database);
-      
+
       // Check cache first (1 hour cache for zone comparison data)
       const cacheKey = `zone-comparison:${database}:${metricId}:${periodStart}:${periodEnd}:${prevPeriodStart || ""}:${prevPeriodEnd || ""}`;
       const cachedData = getFromCache<any>(cacheKey);
@@ -4970,13 +4991,13 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
         });
         return res.json({ ...cachedData, fromCache: true });
       }
-      
+
       // Get all available zones
       const zonesResult = await pool.query(
         `SELECT DISTINCT abbreviation FROM public.districts WHERE abbreviation IS NOT NULL ORDER BY abbreviation`
       );
       const allZones = zonesResult.rows.map((r: any) => r.abbreviation);
-      
+
       // Calculate metrics for all zones in parallel for better performance
       const zoneMetricsPromises = allZones.map(async (zone) => {
         const [currentMetrics, prevMetrics] = await Promise.all([
@@ -4985,15 +5006,15 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
             ? calculateOperationsMetrics(pool, prevPeriodStart as string, prevPeriodEnd as string, null, [zone])
             : Promise.resolve(null),
         ]);
-        
+
         const metricKey = metricId as keyof typeof currentMetrics;
         const currentValue = currentMetrics[metricKey];
-        
+
         // Skip zones with non-numeric values
         if (typeof currentValue !== 'number') {
           return null;
         }
-        
+
         let variance: number | null = null;
         if (prevMetrics) {
           const prevValue = prevMetrics[metricKey];
@@ -5003,21 +5024,21 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
             variance = currentValue > 0 ? 100 : 0;
           }
         }
-        
+
         return {
           zone,
           value: currentValue,
           variance,
         };
       });
-      
+
       const zoneResults = (await Promise.all(zoneMetricsPromises)).filter(
         (r): r is { zone: string; value: number; variance: number | null } => r !== null
       );
-      
+
       // Sort by value descending (highest first)
       zoneResults.sort((a, b) => b.value - a.value);
-      
+
       // Also calculate the "All Zones" aggregate
       const allZonesMetrics = await calculateOperationsMetrics(
         pool,
@@ -5027,7 +5048,7 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
         []
       );
       const allZonesValue = allZonesMetrics[metricId as keyof typeof allZonesMetrics];
-      
+
       let allZonesVariance: number | null = null;
       if (prevPeriodStart && prevPeriodEnd) {
         const prevAllZonesMetrics = await calculateOperationsMetrics(
@@ -5038,7 +5059,7 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
           []
         );
         const prevAllZonesValue = prevAllZonesMetrics[metricId as keyof typeof prevAllZonesMetrics];
-        
+
         if (typeof allZonesValue === 'number' && typeof prevAllZonesValue === 'number') {
           if (prevAllZonesValue !== 0) {
             allZonesVariance = Math.round(((allZonesValue - prevAllZonesValue) / prevAllZonesValue) * 100 * 100) / 100;
@@ -5047,7 +5068,7 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
           }
         }
       }
-      
+
       await logAudit({
         userId,
         userEmail: user.email,
@@ -5056,7 +5077,7 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
         details: `Metric: ${metricId}, Period: ${periodStart} to ${periodEnd}`,
         ip: req.ip || undefined,
       });
-      
+
       const responseData = {
         metricId,
         periodStart,
@@ -5067,10 +5088,10 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
         },
         zones: zoneResults,
       };
-      
+
       // Cache for 1 hour (3600000ms)
       setInCache(cacheKey, responseData, 3600000);
-      
+
       res.json({ ...responseData, fromCache: false });
     } catch (err) {
       console.error("Error in zone comparison:", err);
@@ -5086,23 +5107,23 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
       const refresh = req.query.refresh === "true";
       const userId = (req.user as any)?.id;
       const user = await authStorage.getUser(userId);
-      
+
       if (!user) {
         return res.status(401).json({ error: "Unauthorized" });
       }
-      
+
       if (!metricId) {
         return res.status(400).json({ error: "Missing required parameter: metricId" });
       }
-      
+
       // Validate metricId using the canonical OPERATIONS_METRIC_SPECS source
       const metricSpec = getOperationsMetricSpec(metricId as string);
       if (!metricSpec) {
         return res.status(400).json({ error: `Invalid metricId: ${metricId}. Use a valid operations metric ID.` });
       }
-      
+
       const pool = getPool(database);
-      
+
       // Check cache first (skip if refresh requested)
       const cacheKey = `zone-time-series:${database}:${metricId}:${periodType}`;
       if (!refresh) {
@@ -5119,22 +5140,22 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
           return res.json({ ...cachedData, fromCache: true });
         }
       }
-      
+
       // Generate periods (same logic as main operations-performance endpoint)
       const periods: { startUTC: string; endUTC: string; label: string }[] = [];
-      
+
       if (periodType === "monthly") {
         // Monthly: Last 12 months
         const now = new Date();
         for (let i = 0; i < 12; i++) {
           const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
           const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
-          
+
           // Convert to PST (UTC-8)
           const startDateStr = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01T08:00:00.000Z`;
           const endDateStr = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-01T08:00:00.000Z`;
           const monthLabel = monthStart.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-          
+
           periods.push({ startUTC: startDateStr, endUTC: endDateStr, label: monthLabel });
         }
       } else {
@@ -5142,40 +5163,40 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
         const startDate = new Date("2025-12-29T00:00:00-08:00");
         const now = new Date();
         let weekStart = startDate;
-        
+
         while (weekStart < now) {
           const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
-          
+
           const startDateStr = weekStart.toISOString().split("T")[0] + "T08:00:00.000Z";
           const endDateStr = weekEnd.toISOString().split("T")[0] + "T08:00:00.000Z";
           const weekLabel = `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${new Date(weekEnd.getTime() - 86400000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
-          
+
           periods.push({ startUTC: startDateStr, endUTC: endDateStr, label: weekLabel });
-          
+
           weekStart = weekEnd;
         }
       }
-      
+
       // For weekly: reverse so most recent is first (weeks are built oldest to newest)
       // For monthly: already built most recent first, no reverse needed
       if (periodType === "weekly") {
         periods.reverse();
       }
-      
+
       // Limit to last 12 periods for performance
       const limitedPeriods = periods.slice(0, 12);
-      
+
       // Get all available zones
       const zonesResult = await pool.query(
         `SELECT DISTINCT abbreviation FROM public.districts WHERE abbreviation IS NOT NULL ORDER BY abbreviation`
       );
       const allZones = zonesResult.rows.map((r: any) => r.abbreviation);
-      
+
       // Calculate metrics for all zones x all periods in parallel
       // Group by zone to make the response structure easier to work with
       const zoneDataPromises = allZones.map(async (zone) => {
         const periodValues: { periodLabel: string; periodStart: string; periodEnd: string; value: number }[] = [];
-        
+
         // Calculate metrics for this zone across all periods in parallel
         const metricsPromises = limitedPeriods.map(async (period) => {
           const metrics = await calculateOperationsMetrics(pool, period.startUTC, period.endUTC, null, [zone]);
@@ -5187,18 +5208,18 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
             value: typeof value === 'number' ? value : 0,
           };
         });
-        
+
         const results = await Promise.all(metricsPromises);
         periodValues.push(...results);
-        
+
         return {
           zone,
           periods: periodValues,
         };
       });
-      
+
       const zoneData = await Promise.all(zoneDataPromises);
-      
+
       // Also calculate "All Zones" aggregate across all periods
       const allZonesPeriodsPromises = limitedPeriods.map(async (period) => {
         const metrics = await calculateOperationsMetrics(pool, period.startUTC, period.endUTC, null, []);
@@ -5210,16 +5231,16 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
           value: typeof value === 'number' ? value : 0,
         };
       });
-      
+
       const allZonesPeriods = await Promise.all(allZonesPeriodsPromises);
-      
+
       // Sort zones by their most recent value (descending)
       zoneData.sort((a, b) => {
         const aLatest = a.periods[0]?.value || 0;
         const bLatest = b.periods[0]?.value || 0;
         return bLatest - aLatest;
       });
-      
+
       await logAudit({
         userId,
         userEmail: user.email,
@@ -5228,7 +5249,7 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
         details: `Metric: ${metricId}, Period Type: ${periodType}, Periods: ${limitedPeriods.length}`,
         ip: req.ip || undefined,
       });
-      
+
       const responseData = {
         metricId,
         metricLabel: metricSpec.name,
@@ -5240,10 +5261,10 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
         },
         zones: zoneData,
       };
-      
+
       // Cache for 1 hour
       setInCache(cacheKey, responseData, 3600000);
-      
+
       res.json({ ...responseData, fromCache: false });
     } catch (err) {
       console.error("Error in zone time-series:", err);

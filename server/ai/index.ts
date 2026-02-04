@@ -1,4 +1,4 @@
-export { getOpenAIClient, AI_CONFIG } from "./openai";
+export { getGeminiClient, GEMINI_CONFIG } from "./gemini";
 export {
   getTableDataDictionary,
   formatDataDictionaryForPrompt,

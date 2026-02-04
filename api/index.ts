@@ -1,7 +1,8 @@
-import { app, setupPromise } from "../server/index";
-import type { Request, Response } from "express";
+// @ts-ignore
+// Import from the bundled file we created
+import { app, registerAndSetup } from './_lib/index.vercel.js';
 
-export default async function handler(req: Request, res: Response) {
-    await setupPromise;
+export default async function handler(req: any, res: any) {
+    await registerAndSetup();
     app(req, res);
 }

@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -59,7 +60,7 @@ app.use((req, res, next) => {
   next();
 });
 
-(async () => {
+const setupPromise = (async () => {
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -85,14 +86,24 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
+
+  // Only listen if run directly (not imported as a module)
+  // checks for both direct node execution and esbuild-bundled execution
+  // In ESM, require is not defined. Use import.meta.url check.
+  const isMainModule = process.argv[1] === import.meta.filename;
+
+  if (isMainModule) {
+    httpServer.listen(
+      {
+        port,
+        host: "0.0.0.0",
+        // reusePort: true,
+      },
+      () => {
+        log(`serving on port ${port}`);
+      },
+    );
+  }
 })();
+
+export { app, httpServer, setupPromise };

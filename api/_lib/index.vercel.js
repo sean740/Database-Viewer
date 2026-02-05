@@ -585,6 +585,7 @@ import express from "express";
 
 // server/routes.ts
 import { Pool as Pool2 } from "pg";
+import { SchemaType } from "@google/generative-ai";
 import rateLimit from "express-rate-limit";
 import { eq as eq2, and, desc, count } from "drizzle-orm";
 
@@ -1846,37 +1847,43 @@ var filterHistoryEntrySchema = z.object({
   // ISO timestamp
 });
 
-// server/ai/openai.ts
-import OpenAI from "openai";
-var openaiClient = null;
-function getOpenAIClient() {
-  if (openaiClient) return openaiClient;
-  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
-  const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-  if (!apiKey || !baseURL) {
+// server/ai/gemini.ts
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
+var genAI = null;
+function getGeminiClient() {
+  if (genAI) return genAI;
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
     return null;
   }
-  openaiClient = new OpenAI({
-    apiKey,
-    baseURL
-  });
-  return openaiClient;
+  genAI = new GoogleGenerativeAI(apiKey);
+  return genAI;
 }
-var AI_CONFIG = {
-  nlq: {
-    model: "gpt-4o",
-    temperature: 0.1,
-    maxTokens: 1200
-  },
-  smartFollowup: {
-    model: "gpt-4o",
-    temperature: 0.3,
-    maxTokens: 800
-  },
-  reportChat: {
-    model: "gpt-4o",
-    temperature: 0.5,
-    maxTokens: 1200
+var GEMINI_CONFIG = {
+  modelName: "gemini-1.5-pro",
+  // Safety settings to be permissive for data analysis (avoid blocking SQL or technical terms)
+  safetySettings: [
+    {
+      category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE
+    }
+  ],
+  generationConfig: {
+    temperature: 0.2,
+    // Lower temperature for more deterministic analysis
+    maxOutputTokens: 2e3
   }
 };
 
@@ -3814,13 +3821,13 @@ async function registerRoutes(httpServer, app2) {
     }
   });
   app2.get("/api/nlq/status", isAuthenticated, (req, res) => {
-    const client = getOpenAIClient();
+    const client = getGeminiClient();
     res.json({ enabled: client !== null });
   });
   app2.post("/api/nlq", isAuthenticated, async (req, res) => {
     try {
       const { database, query, table: currentTable, context } = req.body;
-      const client = getOpenAIClient();
+      const client = getGeminiClient();
       if (!client) {
         return res.status(400).json({ error: "Natural language queries are not enabled" });
       }
@@ -3865,16 +3872,21 @@ async function registerRoutes(httpServer, app2) {
         context
       });
       const makeRequest = async () => {
-        const response = await client.chat.completions.create({
-          model: AI_CONFIG.nlq.model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: query }
-          ],
-          max_completion_tokens: AI_CONFIG.nlq.maxTokens,
-          temperature: AI_CONFIG.nlq.temperature
+        const model = client.getGenerativeModel({
+          model: GEMINI_CONFIG.modelName,
+          generationConfig: {
+            responseMimeType: "application/json",
+            ...GEMINI_CONFIG.generationConfig
+          }
         });
-        return response.choices[0]?.message?.content || "{}";
+        const chat = model.startChat({
+          history: [
+            { role: "user", parts: [{ text: systemPrompt }] },
+            { role: "model", parts: [{ text: "Understood. I will generate the JSON response." }] }
+          ]
+        });
+        const result = await chat.sendMessage(query);
+        return result.response.text();
       };
       const content = await makeRequest();
       const validColumns = columnsWithTypes.map((c) => c.name);
@@ -3909,7 +3921,7 @@ async function registerRoutes(httpServer, app2) {
   app2.post("/api/nlq/smart-followup", isAuthenticated, async (req, res) => {
     try {
       const { database, table: currentTable, filters, context } = req.body;
-      const client = getOpenAIClient();
+      const client = getGeminiClient();
       if (!client) {
         return res.status(400).json({ error: "Natural language queries are not enabled" });
       }
@@ -4027,16 +4039,21 @@ async function registerRoutes(httpServer, app2) {
         context
       });
       const makeRequest = async () => {
-        const response = await client.chat.completions.create({
-          model: AI_CONFIG.smartFollowup.model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: "Help me understand why my query returned no results and suggest alternatives." }
-          ],
-          max_completion_tokens: AI_CONFIG.smartFollowup.maxTokens,
-          temperature: AI_CONFIG.smartFollowup.temperature
+        const model = client.getGenerativeModel({
+          model: GEMINI_CONFIG.modelName,
+          generationConfig: {
+            responseMimeType: "application/json",
+            ...GEMINI_CONFIG.generationConfig
+          }
         });
-        return response.choices[0]?.message?.content || "{}";
+        const chat = model.startChat({
+          history: [
+            { role: "user", parts: [{ text: systemPrompt }] },
+            { role: "model", parts: [{ text: "Understood. I will generate the JSON response." }] }
+          ]
+        });
+        const result = await chat.sendMessage("Help me understand why my query returned no results and suggest alternatives.");
+        return result.response.text();
       };
       const content = await makeRequest();
       const parseResult = await parseAndValidateSmartFollowupResponse(content, makeRequest);
@@ -4681,7 +4698,7 @@ async function registerRoutes(httpServer, app2) {
       if (!page) {
         return res.status(404).json({ error: "Report page not found" });
       }
-      const client = getOpenAIClient();
+      const client = getGeminiClient();
       if (!client) {
         return res.status(503).json({ error: "AI service not available" });
       }
@@ -4832,16 +4849,25 @@ CRITICAL: Only use column names that are listed above. For date-based grouping, 
 If you're just providing information or need clarification, respond with plain text.
 IMPORTANT: If you cannot create a block because the request is unclear, you don't have enough information, or you're unsure which columns/tables to use, you MUST ask the user a clarifying question. Never leave the user without a response - either create a block OR ask a specific question to help you understand what they need.
 Always be helpful and explain your suggestions in simple terms.`;
-      const response = await client.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages.slice(-10).map((m) => ({ role: m.role, content: m.content }))
-        ],
-        max_completion_tokens: 1e3,
-        temperature: 0.7
+      if (!message || typeof message !== "string" || message.trim().length === 0) {
+        return res.status(400).json({ error: "Message is required" });
+      }
+      const model = client.getGenerativeModel({
+        model: GEMINI_CONFIG.modelName,
+        generationConfig: {
+          responseMimeType: "application/json",
+          ...GEMINI_CONFIG.generationConfig
+        },
+        systemInstruction: systemPrompt
       });
-      let assistantMessage = response.choices[0]?.message?.content || "I'm sorry, I couldn't process that request.";
+      const chat = model.startChat({
+        history: [
+          { role: "model", parts: [{ text: "Understood. I will generate JSON configurations for data visualization." }] }
+        ]
+      });
+      const result = await chat.sendMessage(message);
+      const responseText = result.response.text();
+      let assistantMessage = responseText;
       messages.push({
         role: "assistant",
         content: assistantMessage,
@@ -4886,28 +4912,28 @@ Always be helpful and explain your suggestions in simple terms.`;
             }
           };
           if (action?.action === "create_block" && action?.block) {
-            const result = await validateSingleBlock(action.block);
-            if (result && !("error" in result)) {
+            const result2 = await validateSingleBlock(action.block);
+            if (result2 && !("error" in result2)) {
               validatedAction = {
                 action: "create_block",
-                block: result,
+                block: result2,
                 explanation: action.explanation || ""
               };
-            } else if (result && "error" in result) {
+            } else if (result2 && "error" in result2) {
               displayMessage += `
 
-**Note:** I wasn't able to create this block because: ${result.error}. Please try rephrasing your request or ask me which columns are available in the table you want to use.`;
+**Note:** I wasn't able to create this block because: ${result2.error}. Please try rephrasing your request or ask me which columns are available in the table you want to use.`;
             }
           }
           if (action?.action === "create_blocks" && Array.isArray(action?.blocks)) {
             const validatedBlocks = [];
             const errors = [];
             for (const block of action.blocks) {
-              const result = await validateSingleBlock(block);
-              if (result && !("error" in result)) {
-                validatedBlocks.push(result);
-              } else if (result && "error" in result && result.error) {
-                errors.push(result.error);
+              const result2 = await validateSingleBlock(block);
+              if (result2 && !("error" in result2)) {
+                validatedBlocks.push(result2);
+              } else if (result2 && "error" in result2 && result2.error) {
+                errors.push(result2.error);
               }
             }
             if (validatedBlocks.length > 0) {
@@ -4940,7 +4966,7 @@ ${validatedAction.explanation}` : validatedAction.explanation;
       });
     } catch (err) {
       console.error("Error in AI chat:", err);
-      res.status(500).json({ error: "Failed to process AI request" });
+      res.status(500).json({ error: `Failed to process AI request: ${err instanceof Error ? err.message : String(err)}` });
     }
   });
   app2.get("/api/zones/:database", isAuthenticated, async (req, res) => {
@@ -5403,7 +5429,7 @@ ${validatedAction.explanation}` : validatedAction.explanation;
       if (!message) {
         return res.status(400).json({ error: "Message is required" });
       }
-      const client = getOpenAIClient();
+      const client = getGeminiClient();
       if (!client) {
         return res.status(503).json({ error: "AI service not available" });
       }
@@ -5477,77 +5503,74 @@ INSTRUCTIONS:
 ${canDrillDown ? "8. When users want to see underlying data, use the tools to fetch and display it" : ""}`;
       const tools = canDrillDown ? [
         {
-          type: "function",
-          function: {
-            name: "get_metric_details",
-            description: "Get the exact calculation formula and description for a specific metric",
-            parameters: {
-              type: "object",
-              properties: {
-                metricId: {
-                  type: "string",
-                  description: "The metric ID (e.g., totalRevenue, bookingsCompleted, signups)",
-                  enum: Object.keys(METRIC_SPECS2)
-                }
-              },
-              required: ["metricId"]
-            }
+          name: "get_metric_details",
+          description: "Get the exact calculation formula and description for a specific metric",
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+              metricId: {
+                type: SchemaType.STRING,
+                description: "The metric ID (e.g., totalRevenue, bookingsCompleted, signups)",
+                enum: Object.keys(METRIC_SPECS2)
+              }
+            },
+            required: ["metricId"]
           }
         },
         {
-          type: "function",
-          function: {
-            name: "get_metric_rows",
-            description: "Fetch the actual database rows that contribute to a metric for a specific week. Returns up to 50 rows as a preview with a CSV download option for full data.",
-            parameters: {
-              type: "object",
-              properties: {
-                metricId: {
-                  type: "string",
-                  description: "The metric ID (e.g., totalRevenue, bookingsCompleted)",
-                  enum: Object.keys(METRIC_SPECS2)
-                },
-                subSourceId: {
-                  type: "string",
-                  description: "For metrics with multiple sources (like totalRevenue), optionally specify a sub-source (e.g., bookingRevenue, subscriptionFees, tips, refunds, creditPacks, stripeFees)"
-                },
-                weekStart: {
-                  type: "string",
-                  description: "ISO date string for the start of the week (UTC)"
-                },
-                weekEnd: {
-                  type: "string",
-                  description: "ISO date string for the end of the week (UTC)"
-                }
+          name: "get_metric_rows",
+          description: "Fetch the actual database rows that contribute to a metric for a specific week. Returns up to 50 rows as a preview with a CSV download option for full data.",
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+              metricId: {
+                type: SchemaType.STRING,
+                description: "The metric ID (e.g., totalRevenue, bookingsCompleted)",
+                enum: Object.keys(METRIC_SPECS2)
               },
-              required: ["metricId", "weekStart", "weekEnd"]
-            }
+              subSourceId: {
+                type: SchemaType.STRING,
+                description: "For metrics with multiple sources (like totalRevenue), optionally specify a sub-source (e.g., bookingRevenue, subscriptionFees, tips, refunds, creditPacks, stripeFees)"
+              },
+              weekStart: {
+                type: SchemaType.STRING,
+                description: "ISO date string for the start of the week (UTC)"
+              },
+              weekEnd: {
+                type: SchemaType.STRING,
+                description: "ISO date string for the end of the week (UTC)"
+              }
+            },
+            required: ["metricId", "weekStart", "weekEnd"]
           }
         }
       ] : void 0;
-      const messages = [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message }
-      ];
-      let response = await client.chat.completions.create({
-        model: AI_CONFIG.reportChat.model,
-        messages,
-        tools,
-        temperature: 0.7,
-        max_tokens: 2e3
+      const model = client.getGenerativeModel({
+        model: GEMINI_CONFIG.modelName,
+        tools: tools ? [{ functionDeclarations: tools }] : void 0,
+        generationConfig: GEMINI_CONFIG.generationConfig
       });
-      let assistantMessage = response.choices[0]?.message;
+      const chat = model.startChat({
+        history: [
+          { role: "user", parts: [{ text: systemPrompt }] },
+          { role: "model", parts: [{ text: "Understood. I'm ready to help with weekly performance metrics." }] }
+        ]
+      });
+      let result = await chat.sendMessage(message);
+      let response = result.response;
+      let assistantMessage = response.text();
       const toolResults = [];
-      while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
-        messages.push(assistantMessage);
-        for (const toolCall of assistantMessage.tool_calls) {
-          const tc = toolCall;
-          const args = JSON.parse(tc.function.arguments);
-          let result;
-          if (tc.function.name === "get_metric_details") {
+      while (response.functionCalls()) {
+        const functionCalls = response.functionCalls();
+        if (!functionCalls) break;
+        const functionResponses = [];
+        for (const call of functionCalls) {
+          const args = call.args;
+          let functionResult;
+          if (call.name === "get_metric_details") {
             const spec = METRIC_SPECS2[args.metricId];
             if (spec) {
-              result = {
+              functionResult = {
                 name: spec.name,
                 category: spec.category,
                 formula: spec.formula,
@@ -5556,13 +5579,13 @@ ${canDrillDown ? "8. When users want to see underlying data, use the tools to fe
                 subSources: spec.subSources?.map((s) => ({ id: s.id, name: s.name }))
               };
             } else {
-              result = { error: "Metric not found" };
+              functionResult = { error: "Metric not found" };
             }
-          } else if (tc.function.name === "get_metric_rows") {
+          } else if (call.name === "get_metric_rows") {
             const pool2 = getPool(database);
             const spec = METRIC_SPECS2[args.metricId];
             if (!spec) {
-              result = { error: "Metric not found" };
+              functionResult = { error: "Metric not found" };
             } else {
               let queryConfig;
               if (args.subSourceId && spec.subSources) {
@@ -5582,7 +5605,7 @@ ${canDrillDown ? "8. When users want to see underlying data, use the tools to fe
                 const countSql = `SELECT COUNT(*) as total FROM (${queryConfig.sql}) as subq`;
                 const countResult = await pool2.query(countSql, queryConfig.params);
                 const totalCount = parseInt(countResult.rows[0]?.total || "0");
-                result = {
+                functionResult = {
                   metricName: spec.name,
                   subSource: args.subSourceId,
                   columns: queryConfig.columns,
@@ -5597,7 +5620,7 @@ ${canDrillDown ? "8. When users want to see underlying data, use the tools to fe
                   subSourceId: args.subSourceId,
                   weekStart: args.weekStart,
                   weekEnd: args.weekEnd,
-                  ...result
+                  ...functionResult
                 });
                 await logAudit({
                   userId,
@@ -5609,26 +5632,22 @@ ${canDrillDown ? "8. When users want to see underlying data, use the tools to fe
                 });
               } catch (queryErr) {
                 console.error("Drilldown query error:", queryErr);
-                result = { error: "Failed to fetch data" };
+                functionResult = { error: "Failed to fetch data" };
               }
             }
           }
-          messages.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result)
+          functionResponses.push({
+            functionResponse: {
+              name: call.name,
+              response: functionResult
+            }
           });
         }
-        response = await client.chat.completions.create({
-          model: AI_CONFIG.reportChat.model,
-          messages,
-          tools,
-          temperature: 0.7,
-          max_tokens: 2e3
-        });
-        assistantMessage = response.choices[0]?.message;
+        result = await chat.sendMessage(functionResponses);
+        response = result.response;
+        assistantMessage = response.text();
       }
-      const finalMessage = assistantMessage?.content || "I apologize, but I couldn't generate a response. Please try again.";
+      const finalMessage = assistantMessage || "I apologize, but I couldn't generate a response. Please try again.";
       await logAudit({
         userId,
         userEmail: user.email,
@@ -5643,7 +5662,7 @@ ${canDrillDown ? "8. When users want to see underlying data, use the tools to fe
       });
     } catch (err) {
       console.error("Error in weekly performance AI chat:", err);
-      res.status(500).json({ error: "Failed to process AI request" });
+      res.status(500).json({ error: `Failed to process AI request: ${err instanceof Error ? err.message : String(err)}` });
     }
   });
   app2.get("/api/weekly-performance/:database/drilldown-export", isAuthenticated, exportLimiter, async (req, res) => {
@@ -5897,7 +5916,7 @@ ${canDrillDown ? "8. When users want to see underlying data, use the tools to fe
       if (!message) {
         return res.status(400).json({ error: "Message is required" });
       }
-      const client = getOpenAIClient();
+      const client = getGeminiClient();
       if (!client) {
         return res.status(503).json({ error: "AI service not available" });
       }
@@ -5965,72 +5984,70 @@ INSTRUCTIONS:
 ${canDrillDown ? "9. When users want to see underlying data, use the tools to fetch and display it" : ""}`;
       const tools = canDrillDown ? [
         {
-          type: "function",
-          function: {
-            name: "get_metric_details",
-            description: "Get the exact calculation formula and description for a specific operations metric",
-            parameters: {
-              type: "object",
-              properties: {
-                metricId: {
-                  type: "string",
-                  description: "The metric ID (e.g., bookingsCompleted, emergencies, deliveryRate)",
-                  enum: Object.keys(OPERATIONS_METRIC_SPECS)
-                }
-              },
-              required: ["metricId"]
-            }
+          name: "get_metric_details",
+          description: "Get the exact calculation formula and description for a specific operations metric",
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+              metricId: {
+                type: SchemaType.STRING,
+                description: "The metric ID (e.g., bookingsCompleted, emergencies, deliveryRate)",
+                enum: Object.keys(OPERATIONS_METRIC_SPECS)
+              }
+            },
+            required: ["metricId"]
           }
         },
         {
-          type: "function",
-          function: {
-            name: "get_metric_rows",
-            description: "Fetch the actual database rows that contribute to a metric for a specific period. Returns up to 50 rows as a preview with a CSV download option for full data.",
-            parameters: {
-              type: "object",
-              properties: {
-                metricId: {
-                  type: "string",
-                  description: "The metric ID (e.g., bookingsCompleted, emergencies, deliveryRate)",
-                  enum: Object.keys(OPERATIONS_METRIC_SPECS)
-                },
-                periodStart: {
-                  type: "string",
-                  description: "ISO date string for the start of the period (UTC)"
-                },
-                periodEnd: {
-                  type: "string",
-                  description: "ISO date string for the end of the period (UTC)"
-                }
+          name: "get_metric_rows",
+          description: "Fetch the actual database rows that contribute to a metric for a specific period. Returns up to 50 rows as a preview with a CSV download option for full data.",
+          parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+              metricId: {
+                type: SchemaType.STRING,
+                description: "The metric ID (e.g., bookingsCompleted, emergencies, deliveryRate)",
+                enum: Object.keys(OPERATIONS_METRIC_SPECS)
               },
-              required: ["metricId", "periodStart", "periodEnd"]
-            }
+              periodStart: {
+                type: SchemaType.STRING,
+                description: "ISO date string for the start of the period (UTC)"
+              },
+              periodEnd: {
+                type: SchemaType.STRING,
+                description: "ISO date string for the end of the period (UTC)"
+              }
+            },
+            required: ["metricId", "periodStart", "periodEnd"]
           }
         }
       ] : void 0;
-      const messages = [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message }
-      ];
-      let response = await client.chat.completions.create({
-        model: AI_CONFIG.reportChat.model,
-        messages,
-        tools,
-        temperature: 0.7,
-        max_tokens: 2e3
+      const model = client.getGenerativeModel({
+        model: GEMINI_CONFIG.modelName,
+        tools: tools ? [{ functionDeclarations: tools }] : void 0,
+        generationConfig: GEMINI_CONFIG.generationConfig
       });
-      let assistantMessage = response.choices[0]?.message;
+      const chat = model.startChat({
+        history: [
+          { role: "user", parts: [{ text: systemPrompt }] },
+          { role: "model", parts: [{ text: "Understood. I'm ready to help with operations performance metrics." }] }
+        ]
+      });
+      let result = await chat.sendMessage(message);
+      let response = result.response;
+      let assistantMessage = response.text();
       const toolResults = [];
-      while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
-        messages.push(assistantMessage);
-        for (const toolCall of assistantMessage.tool_calls) {
-          let result;
-          if (toolCall.function.name === "get_metric_details") {
-            const args = JSON.parse(toolCall.function.arguments);
+      while (response.functionCalls()) {
+        const functionCalls = response.functionCalls();
+        if (!functionCalls) break;
+        const functionResponses = [];
+        for (const call of functionCalls) {
+          const args = call.args;
+          let functionResult;
+          if (call.name === "get_metric_details") {
             const spec = getOperationsMetricSpec(args.metricId);
             if (spec) {
-              result = {
+              functionResult = {
                 name: spec.name,
                 category: spec.category,
                 formula: spec.formula,
@@ -6039,16 +6056,15 @@ ${canDrillDown ? "9. When users want to see underlying data, use the tools to fe
                 sourceTables: spec.sourceTables
               };
             } else {
-              result = { error: "Unknown metric" };
+              functionResult = { error: "Unknown metric" };
             }
-          } else if (toolCall.function.name === "get_metric_rows") {
-            const args = JSON.parse(toolCall.function.arguments);
+          } else if (call.name === "get_metric_rows") {
             const spec = getOperationsMetricSpec(args.metricId);
             if (!spec) {
-              result = { error: "Unknown metric" };
+              functionResult = { error: "Unknown metric" };
             } else {
-              const queryConfig = spec.getDrilldownQuery(args.periodStart, args.periodEnd);
               try {
+                const queryConfig = spec.getDrilldownQuery(args.periodStart, args.periodEnd);
                 const queryResult = await pool2.query(
                   queryConfig.sql + " LIMIT 50",
                   queryConfig.params
@@ -6056,7 +6072,7 @@ ${canDrillDown ? "9. When users want to see underlying data, use the tools to fe
                 const countSql = `SELECT COUNT(*) as total FROM (${queryConfig.sql}) as subq`;
                 const countResult = await pool2.query(countSql, queryConfig.params);
                 const totalCount = parseInt(countResult.rows[0]?.total || "0");
-                result = {
+                functionResult = {
                   metricName: spec.name,
                   columns: queryConfig.columns,
                   rows: queryResult.rows,
@@ -6069,7 +6085,7 @@ ${canDrillDown ? "9. When users want to see underlying data, use the tools to fe
                   metricId: args.metricId,
                   periodStart: args.periodStart,
                   periodEnd: args.periodEnd,
-                  ...result
+                  ...functionResult
                 });
                 await logAudit({
                   userId,
@@ -6081,26 +6097,22 @@ ${canDrillDown ? "9. When users want to see underlying data, use the tools to fe
                 });
               } catch (queryErr) {
                 console.error("Drilldown query error:", queryErr);
-                result = { error: "Failed to fetch data" };
+                functionResult = { error: "Failed to fetch data", details: queryErr.message };
               }
             }
           }
-          messages.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result)
+          functionResponses.push({
+            functionResponse: {
+              name: call.name,
+              response: functionResult
+            }
           });
         }
-        response = await client.chat.completions.create({
-          model: AI_CONFIG.reportChat.model,
-          messages,
-          tools,
-          temperature: 0.7,
-          max_tokens: 2e3
-        });
-        assistantMessage = response.choices[0]?.message;
+        result = await chat.sendMessage(functionResponses);
+        response = result.response;
+        assistantMessage = response.text();
       }
-      const finalMessage = assistantMessage?.content || "I apologize, but I couldn't generate a response. Please try again.";
+      const finalMessage = assistantMessage || "I apologize, but I couldn't generate a response. Please try again.";
       await logAudit({
         userId,
         userEmail: user.email,
@@ -6115,7 +6127,7 @@ ${canDrillDown ? "9. When users want to see underlying data, use the tools to fe
       });
     } catch (err) {
       console.error("Error in operations performance AI chat:", err);
-      res.status(500).json({ error: "Failed to process AI request" });
+      res.status(500).json({ error: `Failed to process AI request: ${err instanceof Error ? err.message : String(err)}` });
     }
   });
   app2.get("/api/operations-performance/:database/drilldown-export", isAuthenticated, exportLimiter, async (req, res) => {

@@ -3291,17 +3291,21 @@ If you're just providing information or need clarification, respond with plain t
 IMPORTANT: If you cannot create a block because the request is unclear, you don't have enough information, or you're unsure which columns/tables to use, you MUST ask the user a clarifying question. Never leave the user without a response - either create a block OR ask a specific question to help you understand what they need.
 Always be helpful and explain your suggestions in simple terms.`;
 
+      if (!message || typeof message !== 'string' || message.trim().length === 0) {
+        return res.status(400).json({ error: "Message is required" });
+      }
+
       const model = client.getGenerativeModel({
         model: GEMINI_CONFIG.modelName,
         generationConfig: {
           responseMimeType: "application/json",
           ...GEMINI_CONFIG.generationConfig
-        }
+        },
+        systemInstruction: systemPrompt,
       });
 
       const chat = model.startChat({
         history: [
-          { role: "user", parts: [{ text: systemPrompt }] },
           { role: "model", parts: [{ text: "Understood. I will generate JSON configurations for data visualization." }] }
         ]
       });
@@ -3435,7 +3439,7 @@ Always be helpful and explain your suggestions in simple terms.`;
       });
     } catch (err) {
       console.error("Error in AI chat:", err);
-      res.status(500).json({ error: "Failed to process AI request" });
+      res.status(500).json({ error: `Failed to process AI request: ${err instanceof Error ? err.message : String(err)}` });
     }
   });
 
@@ -4297,7 +4301,7 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
       });
     } catch (err) {
       console.error("Error in weekly performance AI chat:", err);
-      res.status(500).json({ error: "Failed to process AI request" });
+      res.status(500).json({ error: `Failed to process AI request: ${err instanceof Error ? err.message : String(err)}` });
     }
   });
 
@@ -4632,8 +4636,14 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
         return res.status(400).json({ error: "Message is required" });
       }
 
+      console.log(`[DEBUG] Handling Ops Chat Request. Database: ${database}, UserID: ${userId}`);
+      console.log(`[DEBUG] Environment Key check: ${process.env.GOOGLE_API_KEY ? 'Present' : 'Missing'}`);
+
       const client = getGeminiClient();
+      console.log(`[DEBUG] getGeminiClient returned: ${client ? 'Object' : 'Null'}`);
+
       if (!client) {
+        console.error("[DEBUG] 503 Error Triggered - Client is null");
         return res.status(503).json({ error: "AI service not available" });
       }
 
@@ -4879,7 +4889,7 @@ ${canDrillDown ? '9. When users want to see underlying data, use the tools to fe
       });
     } catch (err) {
       console.error("Error in operations performance AI chat:", err);
-      res.status(500).json({ error: "Failed to process AI request" });
+      res.status(500).json({ error: `Failed to process AI request: ${err instanceof Error ? err.message : String(err)}` });
     }
   });
 

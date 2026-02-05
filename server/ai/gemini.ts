@@ -8,19 +8,6 @@ export function getGeminiClient(): GoogleGenerativeAI | null {
 
     const apiKey = process.env.GOOGLE_API_KEY;
 
-    // DEBUG LOGGING
-    console.log("[DEBUG] getGeminiClient called");
-    console.log("[DEBUG] Current working directory:", process.cwd());
-    console.log("[DEBUG] GOOGLE_API_KEY present:", !!apiKey);
-    if (apiKey) {
-        console.log("[DEBUG] GOOGLE_API_KEY length:", apiKey.length);
-        console.log("[DEBUG] GOOGLE_API_KEY start:", apiKey.substring(0, 5) + "...");
-    } else {
-        console.log("[DEBUG] GOOGLE_API_KEY is missing from process.env");
-        // Print all env keys to see what's available (security: keys only)
-        console.log("[DEBUG] Available Env Keys:", Object.keys(process.env).filter(k => !k.includes("KEY") && !k.includes("SECRET")));
-    }
-
     if (!apiKey) {
         return null;
     }

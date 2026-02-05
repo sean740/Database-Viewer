@@ -93,9 +93,6 @@ const setupPromise = (async () => {
   const isMainModule = process.argv[1] === import.meta.filename;
 
   if (isMainModule) {
-    console.log("----------------------------------------");
-    console.log("   STARTING SERVER WITH DEBUG LOGS      ");
-    console.log("----------------------------------------");
     httpServer.listen(
       {
         port,

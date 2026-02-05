@@ -4636,14 +4636,9 @@ ${canDrillDown ? '8. When users want to see underlying data, use the tools to fe
         return res.status(400).json({ error: "Message is required" });
       }
 
-      console.log(`[DEBUG] Handling Ops Chat Request. Database: ${database}, UserID: ${userId}`);
-      console.log(`[DEBUG] Environment Key check: ${process.env.GOOGLE_API_KEY ? 'Present' : 'Missing'}`);
 
       const client = getGeminiClient();
-      console.log(`[DEBUG] getGeminiClient returned: ${client ? 'Object' : 'Null'}`);
-
       if (!client) {
-        console.error("[DEBUG] 503 Error Triggered - Client is null");
         return res.status(503).json({ error: "AI service not available" });
       }
 
